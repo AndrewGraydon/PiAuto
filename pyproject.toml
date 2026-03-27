@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "piauto"
+version = "0.1.0"
+description = "Wireless Android Auto head unit for Raspberry Pi 4"
+requires-python = ">=3.11"
+dependencies = [
+    "PyYAML>=6.0",
+    "dbus-next>=0.2.3",
+]
+
+[project.optional-dependencies]
+pi = [
+    "gpiod>=2.1",
+]
+splash = [
+    "PyQt5>=5.15",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+[project.scripts]
+piauto = "piauto.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["piauto*"]
