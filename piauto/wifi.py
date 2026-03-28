@@ -7,6 +7,7 @@ Templates per PiAuto-IG-001 §6–7.
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 from pathlib import Path
 
@@ -98,7 +99,18 @@ class WifiManager:
         return True
 
     async def start_ap(self) -> bool:
-        """Start hostapd and dnsmasq. Returns True on success."""
+        """Start hostapd and dnsmasq. Returns True on success.
+
+        If PIAUTO_NO_AP is set, skip actual AP start to avoid killing
+        an existing WiFi client connection (e.g. SSH over wlan0).
+        """
+        if os.environ.get("PIAUTO_NO_AP"):
+            log.warning(
+                "PIAUTO_NO_AP set — skipping AP start (mock mode). "
+                "WiFi client connection preserved."
+            )
+            return True
+
         self._write_configs()
 
         if not await self._setup_interface():

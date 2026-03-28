@@ -27,6 +27,8 @@ WAA_CHAR_UUID = "00004003-0000-1000-8000-00805f9b34fb"
 # D-Bus paths
 BLUEZ_SERVICE = "org.bluez"
 ADAPTER_IFACE = "org.bluez.Adapter1"
+AGENT_IFACE = "org.bluez.Agent1"
+AGENT_MANAGER_IFACE = "org.bluez.AgentManager1"
 LE_ADV_MANAGER_IFACE = "org.bluez.LEAdvertisingManager1"
 LE_ADV_IFACE = "org.bluez.LEAdvertisement1"
 GATT_MANAGER_IFACE = "org.bluez.GattManager1"
@@ -35,6 +37,8 @@ GATT_CHAR_IFACE = "org.bluez.GattCharacteristic1"
 DEVICE_IFACE = "org.bluez.Device1"
 PROPERTIES_IFACE = "org.freedesktop.DBus.Properties"
 OBJECT_MANAGER_IFACE = "org.freedesktop.DBus.ObjectManager"
+
+AGENT_PATH = "/piauto/agent"
 
 # Pairing storage
 PAIRING_DIR = Path("/data/bt")
@@ -180,8 +184,75 @@ class BleManager:
             log.warning("BlueZ not available: %s", exc)
             return False
 
+        # Register a pairing agent so BlueZ can accept incoming pair requests
+        try:
+            await self._register_agent()
+        except Exception as exc:
+            log.warning("Failed to register pairing agent: %s", exc)
+
         log.info("BLE manager connected to BlueZ via D-Bus")
         return True
+
+    async def _register_agent(self) -> None:
+        """Register a NoInputNoOutput agent with BlueZ for auto-accept pairing."""
+        from dbus_next.service import ServiceInterface, method
+
+        class PairingAgent(ServiceInterface):
+            """BlueZ Agent1 that auto-accepts all pairing requests."""
+
+            def __init__(self) -> None:
+                super().__init__(AGENT_IFACE)
+
+            @method()
+            def Release(self):  # noqa: N802
+                log.debug("Agent released")
+
+            @method()
+            def RequestPinCode(self, device: "o") -> "s":  # noqa: N802
+                log.info("PIN requested for %s — returning '0000'", device)
+                return "0000"
+
+            @method()
+            def DisplayPinCode(self, device: "o", pincode: "s"):  # noqa: N802
+                log.info("Display PIN %s for %s", pincode, device)
+
+            @method()
+            def RequestPasskey(self, device: "o") -> "u":  # noqa: N802
+                log.info("Passkey requested for %s — returning 0", device)
+                return 0
+
+            @method()
+            def DisplayPasskey(self, device: "o", passkey: "u", entered: "q"):  # noqa: N802
+                log.info("Display passkey %06d for %s", passkey, device)
+
+            @method()
+            def RequestConfirmation(self, device: "o", passkey: "u"):  # noqa: N802
+                log.info("Auto-confirming passkey %06d for %s", passkey, device)
+
+            @method()
+            def RequestAuthorization(self, device: "o"):  # noqa: N802
+                log.info("Auto-authorizing %s", device)
+
+            @method()
+            def AuthorizeService(self, device: "o", uuid: "s"):  # noqa: N802
+                log.info("Auto-authorizing service %s for %s", uuid, device)
+
+            @method()
+            def Cancel(self):  # noqa: N802
+                log.debug("Agent pairing cancelled")
+
+        self._agent = PairingAgent()
+        self._bus.export(AGENT_PATH, self._agent)
+
+        # Register with BlueZ AgentManager
+        agent_manager = self._bus.get_proxy_object(
+            BLUEZ_SERVICE, "/org/bluez",
+            await self._bus.introspect(BLUEZ_SERVICE, "/org/bluez"),
+        )
+        mgr = agent_manager.get_interface(AGENT_MANAGER_IFACE)
+        await mgr.call_register_agent(AGENT_PATH, "NoInputNoOutput")
+        await mgr.call_request_default_agent(AGENT_PATH)
+        log.info("BlueZ pairing agent registered (auto-accept)")
 
     async def start_advertising(self) -> None:
         """Start BLE advertising with the WAA service UUID.
@@ -203,6 +274,7 @@ class BleManager:
 
             await props.call_set(ADAPTER_IFACE, "Powered", _variant(True))
             await props.call_set(ADAPTER_IFACE, "Discoverable", _variant(True))
+            await props.call_set(ADAPTER_IFACE, "Pairable", _variant(True))
             await props.call_set(ADAPTER_IFACE, "Alias", _variant(self._bt_config.device_name))
 
             self._advertising = True
@@ -258,13 +330,15 @@ class BleManager:
             phone_detected = asyncio.Event()
             detected_phone: list[PhoneInfo] = []
 
+            def _unwrap(val, default="unknown"):
+                """Unwrap a D-Bus Variant to its Python value."""
+                return getattr(val, "value", val) if val is not None else default
+
             def on_interfaces_added(path: str, interfaces: dict) -> None:
                 if DEVICE_IFACE in interfaces:
                     props = interfaces[DEVICE_IFACE]
-                    uuids = props.get("UUIDs", [])
-                    # Check for WAA or general connection
-                    mac = props.get("Address", "unknown")
-                    name = props.get("Name", "unknown")
+                    mac = _unwrap(props.get("Address"), "unknown")
+                    name = _unwrap(props.get("Name"), "unknown")
                     log.info("BLE device connected: %s (%s)", name, mac)
                     detected_phone.append(PhoneInfo(mac=mac, name=name))
                     phone_detected.set()
