@@ -141,7 +141,9 @@ graph TD
 - **BLE for WAA discovery, Classic BT for audio.** The WAA protocol uses Bluetooth Low Energy for initial discovery and credential exchange (confirmed by the WirelessAndroidAutoDongle project and Google's HUIG). Classic Bluetooth (A2DP profile) is used separately for audio output to the vehicle speaker. These are independent Bluetooth functions running concurrently.
 - BlueZ is controlled via its D-Bus API (not direct HCI), which is the supported and stable interface. BlueZ 5.x supports both BLE and Classic profiles simultaneously.
 - hostapd is started only when needed (after BLE handshake) and stopped when projection ends, to conserve radio resources and reduce interference.
+- **WiFi AP+STA mode:** The Pi 4B's BCM43455 supports concurrent AP and station on the same radio (same channel). A virtual `uap0` interface hosts the AP while `wlan0` maintains infrastructure connectivity. This eliminates the need for a second WiFi adapter.
 - dnsmasq was chosen over isc-dhcp-server for minimal footprint.
+- **BR/EDR speaker pairing** uses `piauto.bt_pair` with dbus-next persistent D-Bus connections instead of `bluetoothctl`, which drops the connection too quickly for BR/EDR inquiry results to appear.
 
 ### 4.3 Layer 3: Protocol
 
@@ -273,8 +275,8 @@ The system runs the following long-lived processes:
 | `openauto`       | piauto     | AA head unit emulator. Started by piauto-main when phone is on AP. Handles entire AA session. Exits on disconnect. |
 | `hostapd`        | root       | Wi-Fi AP. Started/stopped by piauto-main.         |
 | `dnsmasq`        | dnsmasq    | DHCP. Started/stopped alongside hostapd.          |
-| `pipewire`       | piauto     | Audio server. Started at boot via systemd.        |
-| `wireplumber`    | piauto     | PipeWire session manager. Started at boot.        |
+| `pipewire`       | pi         | Audio server. User service, requires `loginctl enable-linger pi`. |
+| `wireplumber`    | pi         | PipeWire session manager. User service, requires seat monitoring disabled and linger enabled. |
 | `bluetoothd`     | root       | BlueZ daemon. Started at boot via systemd.        |
 
 All processes except `piauto-main` are managed as systemd services. `piauto-main` is itself a systemd service (`piauto.service`) that orchestrates the others.

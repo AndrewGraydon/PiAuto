@@ -151,17 +151,30 @@ After BLE credential exchange, the Pi starts a 5 GHz access point. The phone use
 | Max Clients      | 1                                        |
 | Hidden SSID      | No                                       |
 
-### 4.3 DHCP Configuration (dnsmasq)
+### 4.3 AP+STA Mode
+
+The Pi 4B's BCM43455 WiFi chip supports concurrent AP and station mode on the same radio channel. In this configuration:
+
+| Interface | Role | Description |
+| :-------- | :--- | :---------- |
+| `wlan0` | Station | Connected to infrastructure WiFi (home network, for SSH/internet) |
+| `uap0` | Access Point | Virtual interface hosting the PiAuto AP for phone connections |
+
+Both interfaces share one radio and **must operate on the same channel**. The AP channel automatically follows the station's channel. The `uap0` interface is created at boot via a udev rule and managed by NetworkManager.
+
+In standalone (production) mode without infrastructure WiFi, `wlan0` runs the AP directly.
+
+### 4.4 DHCP Configuration (dnsmasq)
 
 | Parameter        | Value                                    |
 | :--------------- | :--------------------------------------- |
-| Interface        | wlan0 (AP interface)                     |
-| Pi Static IP     | 192.168.1.1/24                           |
+| Interface        | uap0 (AP+STA mode) or wlan0 (standalone AP) |
+| Pi Static IP     | 192.168.50.1/24 (AP+STA) or 192.168.1.1/24 (standalone) |
 | DHCP Range       | 192.168.1.100 – 192.168.1.199           |
 | Lease Time       | 1 hour                                   |
 | DNS              | Not provided (phone uses mobile data)    |
 
-### 4.4 AP Lifecycle
+### 4.5 AP Lifecycle
 
 The AP is **not** running at all times. It is started and stopped by the state machine:
 

@@ -58,12 +58,13 @@ piauto/
 ├── __main__.py              # Entry point: python -m piauto
 ├── statemachine.py          # State machine (SM-001 implementation)
 ├── ble.py                   # BLE WAA advertising and handshake (BlueZ D-Bus)
+├── bt_pair.py               # BR/EDR discovery and pairing via dbus-next
 ├── wifi.py                  # hostapd + dnsmasq management
 ├── gpio.py                  # Ignition sense (GPIO 17) + fan PWM (GPIO 4)
 ├── thermal.py               # Temperature monitoring + fan profile
 ├── config.py                # YAML config loader + validator
 ├── openauto.py              # OpenAuto process launcher + monitor
-├── splash.py                # Splash screen app launcher + status updates
+├── splash.py                # Splash screen app + BT speaker setup UI
 ├── clock.py                 # System time initialization (FR-042)
 └── logging.py               # journald logging setup
 ```
@@ -177,6 +178,8 @@ WantedBy=multi-user.target
 
 File generated dynamically at `/tmp/hostapd.conf` by `piauto.wifi` module:
 
+> **Note:** In AP+STA mode, the AP runs on `uap0` (virtual interface) while `wlan0` remains connected to infrastructure WiFi. In standalone AP mode (production), `wlan0` is used directly.
+
 ```ini
 interface=wlan0
 driver=nl80211
@@ -240,24 +243,38 @@ chmod 600 /data/tls/key.pem
 
 ### 9.1 Technology
 
-A minimal Python script using **PyQt5** with `QT_QPA_PLATFORM=eglfs`. It displays a full-screen label with status text and a logo.
+A minimal Python script using **PyQt5** with `QT_QPA_PLATFORM=eglfs`. It displays a full-screen window with status text, a "Setup" button, and supports a dedicated Bluetooth speaker pairing UI mode.
 
 ### 9.2 IPC with State Machine
 
-The splash app receives status updates via **command-line arguments at launch**. When the status changes, `piauto-main` kills and relaunches the splash with the new text:
+The splash app communicates with the state machine via **stdout lines**. The state machine reads these with `SplashManager.read_stdout_line()`:
+
+| Signal | Meaning | Triggered By |
+| :----- | :------ | :----------- |
+| `SETUP` | User tapped the Setup button | Idle splash screen |
+| `BACK` | User tapped Back in BT setup | BT setup UI |
+| `PAIRED:mac:name` | Successfully paired a BT speaker | BT setup UI |
+
+**Modes:**
 
 ```bash
-# In IDLE:
+# Status display (IDLE, BT_PAIRING, WIFI_WAIT, etc.):
 QT_QPA_PLATFORM=eglfs python3 -m piauto.splash "Waiting for phone..."
 
-# In BT_PAIRING:
-QT_QPA_PLATFORM=eglfs python3 -m piauto.splash "Pairing..."
-
-# In WIFI_WAIT:
-QT_QPA_PLATFORM=eglfs python3 -m piauto.splash "Connecting to Wi-Fi..."
+# Bluetooth speaker setup UI:
+QT_QPA_PLATFORM=eglfs python3 -m piauto.splash --bt-setup
 ```
 
-This avoids complex IPC. The splash process is lightweight and restarts in < 1 second.
+### 9.3 Bluetooth Speaker Setup UI
+
+The `--bt-setup` mode provides a touchscreen-driven UI for BR/EDR speaker discovery and pairing:
+
+1. User taps "Scan" — launches `piauto.bt_pair scan` via QProcess
+2. Discovered devices appear as tappable buttons
+3. User taps a device — launches `piauto.bt_pair pair MAC` via QProcess
+4. On success (`PAIR_OK`), writes `PAIRED:mac:name` to stdout for the state machine
+
+> **Note:** The bt_pair subprocess is launched as the `pi` user via `sudo -u pi` because BR/EDR discovery as root misses some devices due to BlueZ D-Bus policy differences.
 
 ### 9.3 DRM Master Handoff
 

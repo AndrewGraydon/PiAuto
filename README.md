@@ -24,6 +24,8 @@ Pi ──BT A2DP──► Vehicle Speaker (audio output)
 - **Wireless Android Auto** — no USB cable required
 - **Auto-reconnect** — previously paired phones connect automatically on boot
 - **Multi-phone pairing** — stores up to 8 paired devices
+- **Touchscreen BT speaker setup** — on-screen UI for discovering and pairing Bluetooth speakers
+- **WiFi AP+STA** — simultaneous access point (for phone) and station (for SSH/internet) on one radio
 - **Hardware video decode** — H.264 via V4L2 on VideoCore VI
 - **Compositorless rendering** — Qt EGLFS direct to display (no X11/Wayland)
 - **Bluetooth audio output** — A2DP to vehicle speaker with 4 concurrent AA streams
@@ -73,12 +75,13 @@ piauto/
 ├── __main__.py       # Entry point: python -m piauto
 ├── statemachine.py   # Central orchestrator (8 states)
 ├── ble.py            # BLE WAA advertising and handshake
+├── bt_pair.py        # BR/EDR speaker discovery and pairing (dbus-next)
 ├── wifi.py           # hostapd + dnsmasq AP management
 ├── gpio.py           # Ignition sense + fan PWM (libgpiod)
 ├── thermal.py        # CPU temperature monitoring
 ├── config.py         # YAML config loader + validator
 ├── openauto.py       # OpenAuto process lifecycle
-├── splash.py         # PyQt5 EGLFS splash screen
+├── splash.py         # PyQt5 EGLFS splash + BT setup UI
 ├── clock.py          # System time save/restore (no RTC)
 └── log.py            # journald / stderr logging
 ```
@@ -173,11 +176,19 @@ The project follows specification-driven development. All documents are in [`doc
 
 ## Project Status
 
-This is a prototype/hobbyist project. The specification suite is complete and the Python orchestrator is implemented. Key areas still requiring work:
+This is a prototype/hobbyist project. The specification suite is complete and the Python orchestrator is implemented.
 
+**Working:**
+- Bluetooth speaker discovery and pairing (BR/EDR via dbus-next, with touchscreen UI)
+- A2DP audio output via PipeWire/WirePlumber
+- WiFi AP+STA on single radio (concurrent AP and infrastructure WiFi)
+- Splash screen with status display and Setup button
+- State machine orchestration with GPIO, thermal, and config management
+
+**In progress:**
 - **aasdk TCP transport** — upstream aasdk supports wired USB only; a fork adding TCP transport is needed for wireless AA (see [Implementation Guide](docs/Implementation.md) §2)
 - **BLE GATT server** — the `ble.py` module has the D-Bus framework but the full GATT service registration and WAA handshake flow needs completion against real hardware
-- **Hardware testing** — all modules are implemented but need validation on Pi hardware with a real phone
+- **End-to-end AA projection** — requires aasdk TCP transport to test full phone-to-display flow
 
 ## License
 

@@ -71,6 +71,7 @@ sudo apt install -y \
     bluez \
     hostapd \
     dnsmasq \
+    iw \
     pipewire \
     wireplumber \
     pipewire-audio-client-libraries \
@@ -332,7 +333,15 @@ sudo systemctl enable pipewire.service
 sudo systemctl enable wireplumber.service
 ```
 
-### 8.3 Prevent hostapd and dnsmasq Auto-Start
+### 8.3 Enable User Linger for PipeWire/WirePlumber
+
+PipeWire and WirePlumber run as user services under the `pi` user. Without linger, logind kills the user slice when no active sessions exist (e.g., no SSH connections), tearing down A2DP endpoints and disconnecting Bluetooth speakers.
+
+```bash
+sudo loginctl enable-linger pi
+```
+
+### 8.4 Prevent hostapd and dnsmasq Auto-Start
 
 These are started on-demand by the PiAuto state machine:
 
@@ -345,7 +354,7 @@ sudo systemctl mask dnsmasq.service
 
 > The Python orchestrator runs hostapd/dnsmasq directly via subprocess, not through systemd.
 
-### 8.4 Install the PiAuto Service
+### 8.5 Install the PiAuto Service
 
 ```bash
 sudo cp /path/to/piauto.service /etc/systemd/system/piauto.service
@@ -447,24 +456,67 @@ pactl info | grep "Server Name"
 # Should show: PulseWire (PipeWire's PulseAudio compatibility layer)
 ```
 
-### 10.2 Pair the Bluetooth Speaker
+### 10.2 WirePlumber Bluetooth Configuration
 
-Before first use, pair the A2DP speaker:
+WirePlumber's bluez monitor checks for an active logind seat (`seat_state == "active"`) before starting. On a headless Pi, logind reports `seat_state = "online"` (no physical seat), so the bluez monitor never starts and A2DP endpoints are never registered.
 
-```bash
-bluetoothctl
-# power on
-# agent on
-# default-agent
-# scan on
-# (wait for speaker to appear)
-# pair XX:XX:XX:XX:XX:XX
-# trust XX:XX:XX:XX:XX:XX
-# connect XX:XX:XX:XX:XX:XX
-# exit
+Create `/home/pi/.config/wireplumber/wireplumber.conf.d/50-bluez-config.conf`:
+
+```lua
+monitor.bluez.properties = {
+  bluez5.enable-sbc-xq = true
+  bluez5.enable-msbc = true
+  bluez5.enable-hw-volume = true
+  bluez5.roles = [ a2dp_sink a2dp_source ]
+}
+
+monitor.bluez.rules = [
+  {
+    matches = [
+      { device.name = "~bluez_card.*" }
+    ]
+    actions = {
+      update-props = {
+        bluez5.auto-connect = [ a2dp_sink ]
+      }
+    }
+  }
+]
+
+wireplumber.profiles = {
+  main = {
+    monitor.bluez.seat-monitoring = disabled
+  }
+}
 ```
 
-WirePlumber will auto-reconnect to this speaker on subsequent boots.
+The critical setting is `monitor.bluez.seat-monitoring = disabled`, which makes the bluez monitor start unconditionally.
+
+Restart WirePlumber after creating this file:
+
+```bash
+systemctl --user restart wireplumber
+```
+
+### 10.3 Pair the Bluetooth Speaker
+
+The PiAuto splash screen includes a touchscreen-driven Bluetooth setup UI (tap "Setup" on the idle screen). This uses `piauto.bt_pair` which performs BR/EDR discovery and pairing via dbus-next with persistent D-Bus connections.
+
+To pair manually from the command line:
+
+```bash
+# Scan for BR/EDR devices
+python3 -m piauto.bt_pair scan
+
+# Pair, trust, and connect
+python3 -m piauto.bt_pair pair XX:XX:XX:XX:XX:XX
+```
+
+> **Note:** BR/EDR discovery must run as the `pi` user, not root. Running as root may miss some devices due to BlueZ D-Bus policy differences. The PiAuto service (which runs as root) automatically uses `sudo -u pi` when launching bt_pair.
+
+> **Note:** `bluetoothctl` is not reliable for BR/EDR discovery in non-interactive mode because it drops the D-Bus connection too quickly for inquiry results to appear. The `bt_pair` module keeps the connection alive for the full discovery duration.
+
+WirePlumber will auto-reconnect to paired speakers on subsequent boots.
 
 Optionally set the speaker MAC in `/data/piauto.yaml`:
 
@@ -475,9 +527,88 @@ bluetooth:
 
 ---
 
-## 11. Qt EGLFS Configuration
+## 11. WiFi AP+STA (Dual Interface)
 
-### 11.1 EGLFS KMS Config
+The Pi 4B's BCM43455 WiFi chip supports running AP and station mode simultaneously on the same radio. This allows the Pi to maintain a connection to a home/infrastructure WiFi network (for SSH and internet) while also hosting an AP for Android Auto phone connections.
+
+### 11.1 Hardware Verification
+
+Verify the chipset supports concurrent AP+STA:
+
+```bash
+iw phy phy0 info | grep -A 6 "valid interface combinations"
+```
+
+Expected output includes `#{ managed } <= 1, #{ AP } <= 1` with `#channels <= 1`. The channel constraint means both interfaces must operate on the same channel — the AP channel automatically follows the station's channel.
+
+### 11.2 Create the Virtual AP Interface
+
+Create a udev rule to persist the virtual interface across reboots:
+
+```bash
+# Get wlan0's MAC address
+MAC=$(cat /sys/class/net/wlan0/address)
+# Derive AP MAC by setting the locally-administered bit
+AP_MAC=$(echo "$MAC" | sed 's/^\(..\)/\x02&/' | head -c 17)
+
+sudo tee /etc/udev/rules.d/90-uap0.rules << EOF
+ACTION=="add", SUBSYSTEM=="ieee80211", KERNEL=="phy0", RUN+="/usr/sbin/iw phy phy0 interface add uap0 type __ap", RUN+="/bin/ip link set dev uap0 address ${AP_MAC}"
+EOF
+```
+
+### 11.3 Configure NetworkManager
+
+Create the AP connection profile:
+
+```bash
+nmcli connection add type wifi ifname uap0 con-name piauto-ap \
+  autoconnect yes \
+  wifi.mode ap \
+  wifi.band a \
+  wifi.channel 48 \
+  wifi.ssid "PiAuto" \
+  wifi-sec.key-mgmt wpa-psk \
+  wifi-sec.psk "your-ap-password" \
+  ipv4.method shared \
+  ipv4.addresses 192.168.50.1/24 \
+  ipv6.method disabled
+```
+
+> **Channel note:** The AP channel is overridden by the station's channel at runtime (both must match). Set it to your home router's channel for initial config, but the driver will auto-sync.
+
+### 11.4 Disable WiFi Power Saving
+
+Prevent latency spikes and connection drops:
+
+```bash
+sudo tee /etc/NetworkManager/conf.d/wifi-powersave.conf << 'EOF'
+[connection]
+wifi.powersave = 2
+EOF
+```
+
+### 11.5 Verification
+
+After reboot, both interfaces should be active:
+
+```bash
+nmcli device status
+# wlan0   wifi  connected  your-home-wifi
+# uap0    wifi  connected  piauto-ap
+```
+
+### 11.6 Known Limitations
+
+- **Same channel constraint:** Both interfaces share one radio, so they must be on the same channel. The AP follows the STA channel automatically.
+- **5 GHz required for both:** If your home WiFi is 5 GHz, the AP will also be 5 GHz (and vice versa for 2.4 GHz). Android phones support both.
+- **Firmware stability:** Under heavy concurrent traffic, the brcmfmac driver may occasionally crash. This is rare under normal PiAuto usage.
+- **Channel switching:** If the STA roams to a different channel, AP clients briefly disconnect during the channel switch.
+
+---
+
+## 12. Qt EGLFS Configuration
+
+### 12.1 EGLFS KMS Config
 
 Create `/data/eglfs.json`:
 
@@ -501,7 +632,7 @@ Create `/data/eglfs.json`:
 >   ```
 > - The LCDWiki 7" HDMI-B display reports **1024x600** native resolution (not 800x480 as marketed).
 
-### 11.2 Verify EGLFS Works
+### 12.2 Verify EGLFS Works
 
 ```bash
 QT_QPA_PLATFORM=eglfs /usr/local/bin/autoapp
@@ -510,7 +641,7 @@ QT_QPA_PLATFORM=eglfs /usr/local/bin/autoapp
 
 ---
 
-## 12. Verification Checklist
+## 13. Verification Checklist
 
 Run these checks after setup to confirm everything is ready:
 
@@ -528,12 +659,16 @@ Run these checks after setup to confirm everything is ready:
 | 10 | dnsmasq available | `which dnsmasq` | /usr/sbin/dnsmasq |
 | 11 | GPIO accessible | `gpioinfo 4` | shows lines |
 | 12 | WiFi 5 GHz | `iw phy phy0 info \| grep 5180` | 5 GHz bands listed |
-| 13 | piauto service | `systemctl status piauto` | enabled |
-| 14 | Config file | `cat /data/piauto.yaml` | valid YAML |
+| 13 | User linger | `loginctl show-user pi -p Linger` | Linger=yes |
+| 14 | WiFi AP+STA | `nmcli device status \| grep uap0` | connected (piauto-ap) |
+| 15 | WirePlumber bluez | `ls ~/.config/wireplumber/wireplumber.conf.d/50-bluez-config.conf` | exists |
+| 16 | WiFi power save | `cat /etc/NetworkManager/conf.d/wifi-powersave.conf` | wifi.powersave = 2 |
+| 17 | piauto service | `systemctl status piauto` | enabled |
+| 18 | Config file | `cat /data/piauto.yaml` | valid YAML |
 
 ---
 
-## 13. First Boot Sequence
+## 14. First Boot Sequence
 
 After completing all setup steps:
 
@@ -554,7 +689,7 @@ After completing all setup steps:
 
 ---
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 ### Logs
 
@@ -577,5 +712,10 @@ journalctl -t piauto -f
 | BLE not advertising | BT soft-blocked or BlueZ not running | `rfkill unblock bluetooth && systemctl restart bluetooth`. Check `rfkill list`. |
 | Phone won't connect to WiFi | hostapd failed (bad channel/country) | Check `journalctl -u piauto` for hostapd errors. Verify `wifi.country` matches your region. |
 | No audio from speaker | A2DP not connected | `bluetoothctl connect XX:XX:XX:XX:XX:XX`. Check `wpctl status`. |
+| `profile-unavailable` on BT connect | WirePlumber A2DP endpoints not registered | Check WirePlumber is running: `systemctl --user status wireplumber`. Ensure seat monitoring is disabled (§10.2) and linger is enabled (§8.3). |
+| BT speaker disconnects after SSH logout | User session killed, PipeWire/WirePlumber stopped | Enable linger: `sudo loginctl enable-linger pi` (§8.3). |
+| `bluetoothctl scan` finds nothing (BR/EDR) | D-Bus connection drops too quickly | Use `python3 -m piauto.bt_pair scan` instead — it keeps the D-Bus connection alive (§10.3). |
+| BT scan as root misses devices | BlueZ D-Bus policy differs for root | Run bt_pair as pi user: `sudo -u pi python3 -m piauto.bt_pair scan`. The service does this automatically. |
+| `br-connection-busy` on BT connect | Stale ACL connection from previous attempt | Disconnect first: `bluetoothctl disconnect XX:XX:XX:XX:XX:XX`, wait 3s, then retry. |
 | Boot timeout (60 s) | Service dependency not met | Check which service failed: `systemctl --failed`. |
 | OpenAuto crash | Missing libraries or DRM issue | Run `/usr/local/bin/autoapp` manually and check stderr. |
