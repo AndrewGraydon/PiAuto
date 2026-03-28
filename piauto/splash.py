@@ -4,10 +4,12 @@ Satisfies: FR-036 (splash in IDLE), FR-037 (status during connection).
 See PiAuto-IG-001 §9.
 
 This module serves two purposes:
-1. When run as `python -m piauto.splash "Status text"`, it displays a
-   full-screen PyQt5 EGLFS window with the given status message.
-2. When imported, it provides `launch_splash()` / `kill_splash()` for
-   the state machine to manage the splash as a subprocess.
+1. When run as `python -m piauto.splash`, it displays a full-screen PyQt5
+   EGLFS window that switches between views (idle splash, BT setup) based
+   on commands received via stdin. A single Qt process holds DRM master for
+   the entire session, preventing console flashes during view transitions.
+2. When imported, it provides SplashManager for the state machine to manage
+   the splash as a subprocess.
 
 The splash runs as a separate process to maintain the DRM master
 ownership invariant (only one process owns DRM at a time).
@@ -119,7 +121,12 @@ def _detect_touchscreen_device() -> str:
 
 
 class SplashManager:
-    """Manages the splash screen subprocess."""
+    """Manages the splash screen subprocess.
+
+    The splash is a single long-lived Qt process. View transitions
+    (idle ↔ BT setup) are done by sending commands via stdin,
+    avoiding DRM master release and console flashes.
+    """
 
     def __init__(self) -> None:
         self._proc: asyncio.subprocess.Process | None = None
@@ -140,48 +147,49 @@ class SplashManager:
             ),
         }
 
-    async def launch(self, status_text: str) -> None:
-        """Launch the splash screen with the given status text.
+    async def _ensure_running(self) -> None:
+        """Ensure the splash process is running."""
+        if self.is_running:
+            return
 
-        If a splash is already running, kills it first.
-        """
-        await self.kill()
-
-        cmd = [sys.executable, "-m", "piauto.splash", status_text]
+        cmd = [sys.executable, "-m", "piauto.splash"]
 
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 *cmd,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=self._build_env(),
             )
-            log.info("Splash launched (pid %d): %s", self._proc.pid, status_text)
+            log.info("Splash process launched (pid %d)", self._proc.pid)
         except (FileNotFoundError, PermissionError) as exc:
             log.warning("Failed to launch splash: %s", exc)
 
+    def _send_command(self, command: str) -> None:
+        """Send a command to the splash process via stdin."""
+        if self._proc and self._proc.stdin and self._proc.returncode is None:
+            try:
+                self._proc.stdin.write(f"{command}\n".encode())
+            except (BrokenPipeError, OSError):
+                pass
+
+    async def launch(self, status_text: str) -> None:
+        """Show the idle splash screen with the given status text."""
+        await self._ensure_running()
+        self._send_command(f"STATUS|{status_text}")
+
     async def launch_bt_setup(self) -> None:
-        """Launch the Bluetooth speaker pairing UI."""
-        await self.kill()
-
-        cmd = [sys.executable, "-m", "piauto.splash", "--bt-setup"]
-
-        try:
-            self._proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=self._build_env(),
-            )
-            log.info("BT setup UI launched (pid %d)", self._proc.pid)
-        except (FileNotFoundError, PermissionError) as exc:
-            log.warning("Failed to launch BT setup UI: %s", exc)
+        """Switch to the Bluetooth speaker pairing UI."""
+        await self._ensure_running()
+        self._send_command("BT_SETUP")
+        log.info("Switched to BT setup view")
 
     async def read_stdout_line(self) -> str | None:
         """Read a line from the splash subprocess stdout (non-blocking).
 
         Returns the line content, or None if not available / process exited.
-        Used to receive signals like 'SETUP' or 'PAIRED:mac:name' from the UI.
+        Used to receive signals like 'SETUP' or 'PAIRED|mac|name' from the UI.
         """
         if not self._proc or not self._proc.stdout:
             return None
@@ -231,8 +239,8 @@ class SplashManager:
 _STYLE_BG = "background-color: #1a1a2e;"
 _STYLE_BTN = (
     "QPushButton {"
-    "  background-color: #16213e; color: white; border: 2px solid #0f3460;"
-    "  border-radius: 8px; padding: 12px; font-size: 20px;"
+    "  background-color: #16213e; color: white; border: 2px solid #4a6fa5;"
+    "  border-radius: 8px; padding: 10px; font-size: 16px;"
     "}"
     "QPushButton:pressed { background-color: #0f3460; }"
 )
@@ -247,72 +255,33 @@ _STYLE_TITLE = "color: white; font-size: 28px; font-weight: bold;"
 _STYLE_STATUS = "color: #aaa; font-size: 16px;"
 _STYLE_SETUP_BTN = (
     "QPushButton {"
-    "  background-color: #16213e; color: #aaa; border: 1px solid #0f3460;"
-    "  border-radius: 6px; padding: 8px 16px; font-size: 14px;"
+    "  background-color: #16213e; color: #aaa; border: 1px solid #4a6fa5;"
+    "  border-radius: 6px; padding: 10px 24px; font-size: 18px;"
     "}"
     "QPushButton:pressed { background-color: #0f3460; color: white; }"
 )
 
 
-def _run_splash_app(status_text: str) -> None:
-    """Run the splash screen Qt application (blocking)."""
-    import signal
+def _run_app() -> None:
+    """Run the unified splash/setup Qt application (blocking).
 
-    try:
-        from PyQt5.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget, QPushButton
-        from PyQt5.QtCore import Qt
-        from PyQt5.QtGui import QFont
-    except ImportError:
-        print(f"[splash] PyQt5 not available — printing status: {status_text}", file=sys.stderr)
-        signal.pause()
-        return
-
-    app = QApplication(sys.argv)
-
-    win = QWidget()
-    win.setStyleSheet(_STYLE_BG)
-    layout = QVBoxLayout(win)
-
-    layout.addStretch(1)
-
-    label = QLabel(status_text)
-    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    label.setStyleSheet(_STYLE_TITLE)
-    layout.addWidget(label)
-
-    layout.addStretch(1)
-
-    # Setup button at bottom — writes "SETUP" to stdout for state machine
-    setup_btn = QPushButton("Setup")
-    setup_btn.setStyleSheet(_STYLE_SETUP_BTN)
-    setup_btn.setFixedHeight(40)
-    setup_btn.clicked.connect(lambda: print("SETUP", flush=True))
-    layout.addWidget(setup_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-
-    win.showFullScreen()
-
-    def handle_sigterm(signum, frame):
-        app.quit()
-
-    signal.signal(signal.SIGTERM, handle_sigterm)
-    sys.exit(app.exec_())
-
-
-def _run_bt_setup_app() -> None:
-    """Run the Bluetooth speaker pairing UI (blocking).
-
-    Scans for BT audio devices via dbus-next (BR/EDR discovery) and allows
-    pairing via touchscreen. Writes paired device MAC to stdout on success.
+    Listens on stdin for commands to switch views:
+      STATUS|text  — show idle splash with status text
+      BT_SETUP     — switch to BT speaker pairing UI
+    Writes signals to stdout:
+      SETUP        — user tapped Setup button
+      BACK         — user tapped Back in BT setup
+      PAIRED|mac|name — BT speaker paired successfully
     """
     import signal
-    import subprocess as sp
+    import socket
 
     try:
         from PyQt5.QtWidgets import (
             QApplication, QLabel, QVBoxLayout, QHBoxLayout, QWidget,
-            QPushButton, QScrollArea,
+            QPushButton, QScrollArea, QStackedWidget,
         )
-        from PyQt5.QtCore import Qt, QTimer, QProcess
+        from PyQt5.QtCore import Qt, QProcess, QSocketNotifier
     except ImportError:
         print("[splash] PyQt5 not available", file=sys.stderr)
         signal.pause()
@@ -320,31 +289,62 @@ def _run_bt_setup_app() -> None:
 
     app = QApplication(sys.argv)
 
-    # ── Main window ──
+    # ── Main window with stacked views ──
     win = QWidget()
     win.setStyleSheet(_STYLE_BG)
-    main_layout = QVBoxLayout(win)
-    main_layout.setContentsMargins(20, 15, 20, 15)
+    win_layout = QVBoxLayout(win)
+    win_layout.setContentsMargins(0, 0, 0, 0)
+
+    stack = QStackedWidget()
+    win_layout.addWidget(stack)
+
+    # ── View 0: Idle splash ──
+    idle_page = QWidget()
+    idle_page.setStyleSheet(_STYLE_BG)
+    idle_layout = QVBoxLayout(idle_page)
+
+    idle_layout.addStretch(1)
+
+    idle_label = QLabel("PiAuto")
+    idle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    idle_label.setStyleSheet(_STYLE_TITLE)
+    idle_layout.addWidget(idle_label)
+
+    idle_layout.addStretch(1)
+
+    setup_btn = QPushButton("Setup")
+    setup_btn.setStyleSheet(_STYLE_SETUP_BTN)
+    setup_btn.setFixedHeight(52)
+    setup_btn.setFixedWidth(140)
+    setup_btn.clicked.connect(lambda: print("SETUP", flush=True))
+    idle_layout.addWidget(setup_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+    stack.addWidget(idle_page)
+
+    # ── View 1: BT setup ──
+    bt_page = QWidget()
+    bt_page.setStyleSheet(_STYLE_BG)
+    bt_layout = QVBoxLayout(bt_page)
+    bt_layout.setContentsMargins(20, 15, 20, 15)
 
     # Title bar
     title_bar = QHBoxLayout()
-    title = QLabel("Bluetooth Speaker Setup")
-    title.setStyleSheet(_STYLE_TITLE)
-    title_bar.addWidget(title)
+    bt_title = QLabel("Bluetooth Speaker Setup")
+    bt_title.setStyleSheet(_STYLE_TITLE)
+    title_bar.addWidget(bt_title)
     title_bar.addStretch()
 
     back_btn = QPushButton("Back")
     back_btn.setStyleSheet(_STYLE_BTN)
     back_btn.setFixedSize(100, 44)
-    back_btn.clicked.connect(lambda: (print("BACK", flush=True), app.quit()))
     title_bar.addWidget(back_btn)
-    main_layout.addLayout(title_bar)
+    bt_layout.addLayout(title_bar)
 
     # Status label
-    status = QLabel("Press Scan to find Bluetooth speakers")
-    status.setStyleSheet(_STYLE_STATUS)
-    status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    main_layout.addWidget(status)
+    bt_status = QLabel("Press Scan to find Bluetooth speakers")
+    bt_status.setStyleSheet(_STYLE_STATUS)
+    bt_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    bt_layout.addWidget(bt_status)
 
     # Scrollable device list
     scroll = QScrollArea()
@@ -355,19 +355,21 @@ def _run_bt_setup_app() -> None:
     device_layout = QVBoxLayout(device_container)
     device_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
     scroll.setWidget(device_container)
-    main_layout.addWidget(scroll, stretch=1)
+    bt_layout.addWidget(scroll, stretch=1)
 
-    # Bottom buttons
+    # Scan button
     btn_bar = QHBoxLayout()
     scan_btn = QPushButton("Scan")
     scan_btn.setStyleSheet(_STYLE_BTN_ACCENT)
     scan_btn.setFixedHeight(50)
     btn_bar.addWidget(scan_btn)
-    main_layout.addLayout(btn_bar)
+    bt_layout.addLayout(btn_bar)
 
-    # ── BT scanning logic (uses piauto.bt_pair via QProcess) ──
-    discovered: dict[str, str] = {}  # mac -> name
-    scan_process: list[QProcess] = []  # mutable ref for closure
+    stack.addWidget(bt_page)
+
+    # ── BT scanning logic ──
+    discovered: dict[str, str] = {}
+    scan_process: list[QProcess] = []
     pair_process: list[QProcess] = []
 
     def _clear_devices():
@@ -377,26 +379,24 @@ def _run_bt_setup_app() -> None:
                 item.widget().deleteLater()
 
     def _add_device_button(mac: str, name: str):
-        btn = QPushButton(f"{name}\n{mac}")
+        btn = QPushButton(f"{name}  \u2014  {mac}")
         btn.setStyleSheet(_STYLE_BTN)
-        btn.setFixedHeight(60)
+        btn.setFixedHeight(48)
         btn.clicked.connect(lambda checked, m=mac, n=name: _pair_device(m, n, btn))
         device_layout.addWidget(btn)
 
     def _scan():
-        status.setText("Scanning for speakers...")
-        status.setStyleSheet("color: #e94560; font-size: 16px;")
+        bt_status.setText("Scanning for speakers...")
+        bt_status.setStyleSheet("color: #e94560; font-size: 16px;")
         scan_btn.setEnabled(False)
         _clear_devices()
         discovered.clear()
 
-        # Kill any previous scan
         for p in scan_process:
             if p.state() != QProcess.ProcessState.NotRunning:
                 p.kill()
         scan_process.clear()
 
-        # Launch bt_pair scan subprocess
         proc = QProcess(win)
         scan_process.append(proc)
 
@@ -404,7 +404,6 @@ def _run_bt_setup_app() -> None:
             while proc.canReadLine():
                 line = bytes(proc.readLine()).decode().strip()
                 if line.startswith("DEVICE|"):
-                    # DEVICE|mac|name|class_hex
                     parts = line.split("|", 3)
                     if len(parts) >= 4:
                         mac, name = parts[1], parts[2]
@@ -412,10 +411,10 @@ def _run_bt_setup_app() -> None:
                             discovered[mac] = name
                             _add_device_button(mac, name)
                 elif line == "SCAN_DONE":
-                    status.setText(
-                        f"Found {len(discovered)} device(s) — tap to pair"
+                    bt_status.setText(
+                        f"Found {len(discovered)} device(s) \u2014 tap to pair"
                     )
-                    status.setStyleSheet(_STYLE_STATUS)
+                    bt_status.setStyleSheet(_STYLE_STATUS)
                     scan_btn.setEnabled(True)
 
         proc.readyReadStandardOutput.connect(_on_scan_stdout)
@@ -428,10 +427,9 @@ def _run_bt_setup_app() -> None:
             "  border: 2px solid #e94560; border-radius: 8px;"
             "  padding: 12px; font-size: 20px; }"
         )
-        status.setText(f"Pairing with {name}...")
-        status.setStyleSheet("color: #e94560; font-size: 16px;")
+        bt_status.setText(f"Pairing with {name}...")
+        bt_status.setStyleSheet("color: #e94560; font-size: 16px;")
 
-        # Kill any previous pair process
         for p in pair_process:
             if p.state() != QProcess.ProcessState.NotRunning:
                 p.kill()
@@ -447,18 +445,18 @@ def _run_bt_setup_app() -> None:
                     parts = line.split("|", 2)
                     paired_mac = parts[1] if len(parts) > 1 else mac
                     paired_name = parts[2] if len(parts) > 2 else name
-                    status.setText(f"Connected to {paired_name}!")
-                    status.setStyleSheet("color: #00ff88; font-size: 16px;")
+                    bt_status.setText(f"Connected to {paired_name}!")
+                    bt_status.setStyleSheet("color: #00ff88; font-size: 16px;")
                     btn.setStyleSheet(
                         "QPushButton { background-color: #00662a; color: white;"
                         "  border: 2px solid #00ff88; border-radius: 8px;"
                         "  padding: 12px; font-size: 20px; }"
                     )
-                    print(f"PAIRED:{paired_mac}:{paired_name}", flush=True)
+                    print(f"PAIRED|{paired_mac}|{paired_name}", flush=True)
                 elif line.startswith("PAIR_FAIL|"):
                     msg = line[len("PAIR_FAIL|"):]
-                    status.setText(f"Failed: {msg}")
-                    status.setStyleSheet("color: #ff4444; font-size: 16px;")
+                    bt_status.setText(f"Failed: {msg}")
+                    bt_status.setStyleSheet("color: #ff4444; font-size: 16px;")
                     btn.setStyleSheet(_STYLE_BTN)
 
         proc.readyReadStandardOutput.connect(_on_pair_stdout)
@@ -467,21 +465,67 @@ def _run_bt_setup_app() -> None:
 
     scan_btn.clicked.connect(_scan)
 
-    win.showFullScreen()
+    def _show_bt_setup():
+        bt_status.setText("Press Scan to find Bluetooth speakers")
+        bt_status.setStyleSheet(_STYLE_STATUS)
+        scan_btn.setEnabled(True)
+        _clear_devices()
+        discovered.clear()
+        stack.setCurrentIndex(1)
+
+    def _show_idle():
+        # Kill any running BT processes
+        for p in scan_process + pair_process:
+            if p.state() != QProcess.ProcessState.NotRunning:
+                p.kill()
+        stack.setCurrentIndex(0)
+
+    back_btn.clicked.connect(lambda: (print("BACK", flush=True), _show_idle()))
+
+    # ── stdin command reader ──
+    stdin_notifier = QSocketNotifier(sys.stdin.fileno(), QSocketNotifier.Type.Read, win)
+
+    def _on_stdin():
+        line = sys.stdin.readline().strip()
+        if not line:
+            return
+        if line.startswith("STATUS|"):
+            text = line[len("STATUS|"):]
+            idle_label.setText(text)
+            _show_idle()
+        elif line == "BT_SETUP":
+            _show_bt_setup()
+
+    stdin_notifier.activated.connect(_on_stdin)
+
+    # ── SIGTERM handler ──
+    sig_r, sig_w = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    sig_r.setblocking(False)
+    sig_w.setblocking(False)
 
     def handle_sigterm(signum, frame):
+        sig_w.send(b"\x00")
+
+    def _on_sigterm():
         for p in scan_process + pair_process:
             if p.state() != QProcess.ProcessState.NotRunning:
                 p.kill()
         app.quit()
 
+    sig_notifier = QSocketNotifier(sig_r.fileno(), QSocketNotifier.Type.Read, win)
+    sig_notifier.activated.connect(_on_sigterm)
     signal.signal(signal.SIGTERM, handle_sigterm)
+
+    # ── Start ──
+    # Set initial status from command line arg if provided
+    if len(sys.argv) > 1:
+        idle_label.setText(sys.argv[1])
+
+    stack.setCurrentIndex(0)
+    win.showFullScreen()
+
     sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--bt-setup":
-        _run_bt_setup_app()
-    else:
-        text = sys.argv[1] if len(sys.argv) > 1 else "PiAuto"
-        _run_splash_app(text)
+    _run_app()

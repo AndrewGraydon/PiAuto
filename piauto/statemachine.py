@@ -283,8 +283,8 @@ class StateMachine:
             if line == "BACK":
                 log.info("BT setup: user pressed Back")
                 break
-            if line.startswith("PAIRED:"):
-                parts = line.split(":", 2)
+            if line.startswith("PAIRED|"):
+                parts = line.split("|", 2)
                 if len(parts) == 3:
                     mac, name = parts[1], parts[2]
                     log.info("BT speaker paired: %s (%s)", name, mac)
