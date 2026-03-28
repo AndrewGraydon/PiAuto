@@ -519,6 +519,19 @@ normalized_y = (raw_y - raw_y_min) / (raw_y_max - raw_y_min) × 10,000
 
 Calibration values are read from the evdev device's `ABS_MT_POSITION_X` and `ABS_MT_POSITION_Y` ranges automatically.
 
+### 9.5 libinput Conflict and Resolution
+
+**Problem:** Qt EGLFS loads the `libinput` plugin by default. The USB touchscreen (wch.cn USB2IIC_CTP_CONTROL) is registered by libinput as both a pointer device and a touch device, generating two events per physical tap — causing double-tap behavior in OpenAuto.
+
+**Resolution:** Set `QT_QPA_EGLFS_NO_LIBINPUT=1` in the Qt process environment to disable libinput. Use the `evdevtouch` plugin instead, with the `:grab` parameter to acquire the device exclusively via `EVIOCGRAB`. This must be applied to both the splash screen and OpenAuto subprocess environments.
+
+| Environment Variable | Value | Effect |
+| :------------------- | :---- | :----- |
+| `QT_QPA_EGLFS_NO_LIBINPUT` | `1` | Disables libinput; Qt uses evdev input plugins |
+| `QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS` | `/dev/input/by-id/<device>:grab` | Selects device and claims exclusive kernel access |
+
+See PiAuto-IG-001 §17 for the full environment variable block and implementation notes.
+
 ---
 
 ## 10. IF-08: BT A2DP Audio Output

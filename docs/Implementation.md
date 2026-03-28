@@ -473,7 +473,70 @@ apt install libqt5multimedia5-plugins gstreamer1.0-libav \
 
 ---
 
-## 17. D-Bus Policy for WirePlumber Bluetooth
+## 17. Qt Touch Input Configuration (EGLFS)
+
+### 17.1 Problem: libinput Double-Tap
+
+Qt EGLFS auto-loads the `libinput` plugin by default, which reads the USB touchscreen (wch.cn USB2IIC_CTP_CONTROL) and registers it as **both a pointer device and a touch device**. This causes every physical tap to generate two events — one from each device registration — resulting in double-tap behavior in OpenAuto.
+
+### 17.2 Fix: Disable libinput, Use evdevtouch with Exclusive Grab
+
+Set `QT_QPA_EGLFS_NO_LIBINPUT=1` in the subprocess environment to prevent Qt from loading libinput. Then specify the `evdevtouch` plugin explicitly with the `:grab` parameter to claim exclusive access to the device node, preventing any other process from also reading it.
+
+This applies to **both** the splash screen (`splash.py`) and OpenAuto (`openauto.py`) subprocess environments:
+
+```python
+env={
+    **os.environ,
+    "QT_QPA_PLATFORM": "eglfs",
+    "QT_QPA_EGLFS_KMS_CONFIG": "/data/eglfs.json",
+    "QT_QPA_EGLFS_NO_LIBINPUT": "1",
+    "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS": "/dev/input/by-id/usb-wch.cn_USB2IIC_CTP_CONTROL-event-if00:rotate=0:grab",
+    "XDG_RUNTIME_DIR": "/run/user/1000",
+    "PULSE_SERVER": "unix:/run/user/1000/pulse/native",
+}
+```
+
+| Variable | Purpose |
+| :------- | :------ |
+| `QT_QPA_EGLFS_NO_LIBINPUT` | Disables libinput plugin; Qt falls back to evdev input plugins |
+| `QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS` | Specifies the touch device path and activates `:grab` for exclusive access |
+
+**Note:** The `:grab` parameter uses the kernel `EVIOCGRAB` ioctl to ensure the device node is owned exclusively by the Qt process. The device path (`/dev/input/by-id/...`) should use a stable symlink rather than a volatile `eventN` index.
+
+---
+
+## 18. Phone Disconnect — Return to Splash
+
+### 18.1 Problem: autoapp Does Not Exit on Phone Disconnect
+
+When the phone disconnects from an active Android Auto session, `autoapp` (OpenAuto) does **not** exit. It remains running and displays its own internal waiting screen. This means the state machine's existing mechanism of watching for process exit (exit code 0 → `PhoneDisconnected`) does not fire — the system stays in PROJECTION_ACTIVE indefinitely.
+
+### 18.2 Fix: Watch for Projection-Stopped Log Patterns
+
+`OpenAutoManager` exposes a `wait_for_projection_stopped()` async method that monitors `autoapp`'s stderr in a background task. It searches for known log patterns that indicate the AA session has ended:
+
+| Log Pattern | Source |
+| :---------- | :----- |
+| `onAndroidAutoQuit` | OpenAuto AA session lifecycle callback |
+| `[WifiProjectionService] stop()` | aasdk WifiProjectionService teardown |
+
+When either pattern is detected, the state machine:
+
+1. Sends SIGTERM to `autoapp` (killing the lingering process).
+2. Re-launches the splash screen (which reacquires DRM master).
+3. Transitions to IDLE, resetting for the next connection.
+
+### 18.3 Implementation Notes
+
+- `wait_for_projection_stopped()` runs as an `asyncio.Task` started on entry to PROJECTION_ACTIVE and cancelled on exit.
+- The method reads `autoapp`'s stderr line-by-line asynchronously; it does not poll — it streams.
+- The exact log patterns may vary across OpenAuto builds. The pattern list should be updated in the build notes after verifying against the pinned OpenAuto commit (see §2.3).
+- If `autoapp` exits on its own (exit code 0 or 1) before `wait_for_projection_stopped()` fires, the existing exit-code logic takes precedence and the task is cancelled.
+
+---
+
+## 19. D-Bus Policy for WirePlumber Bluetooth
 
 WirePlumber (running as user `pi`, uid 1000) must communicate with `bluetoothd` (running as root) over the system D-Bus to manage A2DP sink/source endpoints. Without an explicit policy file, D-Bus denies these calls.
 

@@ -157,15 +157,17 @@ stateDiagram-v2
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | OpenAuto is streaming video to display and audio to PipeWire. Touch input forwarding is active. Start AVRCP volume sync (poll BlueZ MediaTransport1.Volume, map to PipeWire default sink via wpctl). |
-| Exit Actions   | Stop AVRCP volume sync                                        |
+| Entry Actions  | OpenAuto is streaming video to display and audio to PipeWire. Touch input forwarding is active. Start AVRCP volume sync (poll BlueZ MediaTransport1.Volume, map to PipeWire default sink via wpctl). Start `wait_for_projection_stopped()` monitoring task on OpenAutoManager. |
+| Exit Actions   | Stop AVRCP volume sync. Cancel `wait_for_projection_stopped()` task.  |
 | Satisfies      | FR-016 to FR-031, FR-038, FR-039, PR-002, PR-003, PR-004     |
 
 | Event              | Guard                    | Target State      | Actions                      |
 | :----------------- | :----------------------- | :---------------- | :--------------------------- |
 | ConnectionLost     | OpenAuto exited with code 1 | ERROR_RECOVERY | Log reason, preserve retry count |
-| PhoneDisconnected  | OpenAuto exited with code 0 | IDLE            | Restart splash screen app    |
+| PhoneDisconnected  | OpenAuto exited with code 0, **or** projection-stopped log pattern detected | IDLE | Kill autoapp (if still running). Restart splash screen app. |
 | IgnitionOff        | —                        | SHUTDOWN          | —                            |
+
+**Note on autoapp non-exit behavior:** When the phone ends an AA session, `autoapp` does **not** exit — it remains running and displays its own waiting screen. The state machine therefore cannot rely solely on process exit to detect disconnection. `OpenAutoManager.wait_for_projection_stopped()` monitors `autoapp`'s stderr asynchronously and raises `PhoneDisconnected` when a projection-stopped log pattern is detected (e.g., `"onAndroidAutoQuit"` or `"[WifiProjectionService] stop()"`). On receiving this event, the state machine sends SIGTERM to `autoapp` before re-launching the splash screen.
 
 ### 3.7 ERROR_RECOVERY
 
@@ -210,7 +212,7 @@ stateDiagram-v2
 | OpenAutoReady        | OpenAuto (log parse)   | OpenAuto reports projection is active            |
 | OpenAutoFailed       | OpenAuto (exit code)   | OpenAuto exited with non-zero code or timed out  |
 | ConnectionLost       | OpenAuto (exit code 1) | OpenAuto exited due to unexpected connection loss |
-| PhoneDisconnected    | OpenAuto (exit code 0) | OpenAuto exited due to clean phone-initiated teardown |
+| PhoneDisconnected    | OpenAuto (exit code 0) **or** OpenAutoManager log watcher | Phone ended the AA session. autoapp may not exit on disconnect; the log watcher detects projection-stopped patterns and raises this event, after which the state machine kills autoapp. |
 | RetryAvailable       | Internal (retry counter) | Retry counter < 3                              |
 | RetriesExhausted     | Internal (retry counter) | Retry counter ≥ 3                              |
 | IgnitionOff          | GPIO 17 (libgpiod)     | Ignition sense pin went LOW for > 500 ms (debounced) |
@@ -224,7 +226,7 @@ stateDiagram-v2
 3. **No implicit transitions.** Every state change is triggered by an explicit event from the event catalog.
 4. **Retry isolation.** ERROR_RECOVERY is only reachable from TCP_CONNECT and PROJECTION_ACTIVE (states where the phone is on the AP). BT and WiFi failures return directly to IDLE. Retries re-enter TCP_CONNECT only.
 5. **Display ownership.** Exactly one process owns the DRM master at any time: either the splash screen app or OpenAuto. They never run concurrently.
-6. **OpenAuto autonomy.** During TCP_CONNECT and PROJECTION_ACTIVE, the state machine does NOT interfere with OpenAuto's internal protocol handling. It only monitors the process (alive/exited) and GPIO 17.
+6. **OpenAuto autonomy.** During TCP_CONNECT and PROJECTION_ACTIVE, the state machine does NOT interfere with OpenAuto's internal protocol handling. It monitors the process (alive/exited), GPIO 17, and — during PROJECTION_ACTIVE — OpenAuto's stderr for projection-stopped log patterns (via `wait_for_projection_stopped()`). The state machine does not parse any other OpenAuto output beyond these defined patterns.
 
 ---
 
