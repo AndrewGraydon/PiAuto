@@ -591,7 +591,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-007 | DHCP Lease Assignment             | T      | Pass    | 2026-03-28 | Phone received IP on AP subnet |
 | TC-008 | TCP Listen Port 5000              | T      | Pass    | 2026-03-28 | Verified via `ss -tlnH` during BT_PAIRING |
 | TC-009 | TLS + Version + Service Discovery | T      | Pass    | 2026-03-28 | AA projection fully operational |
-| TC-010 | Reconnection on Loss              | T      | Pending |            |       |
+| TC-010 | Reconnection on Loss              | T      | Partial | 2026-03-28 | AA disconnect+reconnect works; WiFi toggle causes phone to rejoin house WiFi instead of AP |
 | TC-011 | H.264 Decode & Display            | D      | Pass    | 2026-03-28 | Video renders on 7" via Qt EGLFS + GStreamer |
 | TC-012 | PipeWire Audio Path               | T      | Pass    | 2026-03-28 | Audio through PipeWire → BT A2DP speaker |
 | TC-013 | Four Audio Streams                | D+I    | Pending |            |       |
@@ -599,7 +599,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-015 | BT A2DP Audio Output              | D      | Pass    | 2026-03-28 | Audio on BT speaker, not HDMI |
 | TC-016 | BT Audio Auto-Reconnect           | T      | Pending |            |       |
 | TC-017 | Touch Event Path                  | T      | Pass    | 2026-03-28 | Single-tap working after libinput fix |
-| TC-018 | Multi-Touch                       | T      | Pending |            |       |
+| TC-018 | Multi-Touch                       | T      | Fail    | 2026-03-28 | HW supports 6-point MT; OpenAuto sends single-touch only (upstream limit) |
 | TC-019 | Ignition Sense Detection          | M      | Blocked |            | GPIO 17 not wired yet |
 | TC-020 | Clean Shutdown                    | M      | Blocked |            | Requires ignition GPIO |
 | TC-021 | Auto-Boot on Power                | T      | Pending |            |       |
@@ -614,7 +614,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-030 | Connection Setup Time             | M      | Pending |            |       |
 | TC-031 | Power-Loss Resilience             | T      | Pending |            |       |
 | TC-032 | 12-Hour Soak Test                 | T      | Pending |            |       |
-| TC-033 | Config & Logging Inspection       | I      | Pending |            |       |
+| TC-033 | Config & Logging Inspection       | I      | Pass    | 2026-03-28 | Single YAML config, journald only, no log files |
 | TC-034 | BT Speaker Mid-Session Disconnect | T      | Pending |            |       |
 | TC-035 | Clock Initialization (No RTC)     | T+I    | Pending |            |       |
 | TC-036 | BT_PAIRING Timeout                | T      | Pending |            |       |
