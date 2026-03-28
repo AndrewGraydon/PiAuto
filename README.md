@@ -38,7 +38,7 @@ Pi ──BT A2DP──► Vehicle Speaker (audio output)
 | :-------- | :------------ |
 | Board | Raspberry Pi 4 Model B (4 GB) |
 | Display | LCDWiki 7" HDMI Display-B (800x480, USB capacitive touch) |
-| OS | Raspberry Pi OS Lite, Bookworm, 64-bit |
+| OS | Raspberry Pi OS Lite, Trixie, 64-bit |
 | Audio | Bluetooth A2DP to vehicle speaker |
 | Power | 5.1 V via vehicle buck converter, GPIO 17 ignition sense |
 | Fan | PWM on GPIO 4 (off < 50 C, 50% at 50-65 C, 100% > 65 C) |
@@ -166,7 +166,7 @@ The project follows specification-driven development. All documents are in [`doc
 
 - **Phone:** Android 11+ with Wireless Android Auto
 - **Pi:** Raspberry Pi 4 Model B (4 GB)
-- **OS:** Raspberry Pi OS Lite Bookworm 64-bit
+- **OS:** Raspberry Pi OS Lite Trixie 64-bit
 - **Python:** 3.11+
 - **OpenAuto/aasdk:** Built from source (see [Pi Setup Guide](docs/PiSetup.md))
 - **Bluetooth speaker:** Any A2DP-capable audio receiver

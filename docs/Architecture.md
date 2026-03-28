@@ -295,7 +295,7 @@ All processes except `piauto-main` are managed as systemd services. `piauto-main
 
 ### 7.1 Operating System
 
-- **Base:** Raspberry Pi OS Lite, Bookworm, 64-bit (aarch64)
+- **Base:** Raspberry Pi OS Lite, Trixie, 64-bit (aarch64)
 - **Kernel:** Linux 6.x with V4L2 M2M, KMS/DRM, and libgpiod support
 - **Filesystem:** overlayfs — read-only root (`/`) with tmpfs overlay for `/tmp`, `/var/run`, `/var/log`
 - **Writable partition:** `/data` (ext4) for persistent configuration and pairing records

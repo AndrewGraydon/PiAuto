@@ -42,7 +42,7 @@ You'll also need a laptop or desktop with:
 
 ### 2.1 Flash the Image
 
-1. Download **Raspberry Pi OS Lite (64-bit, Bookworm)** from https://www.raspberrypi.com/software/operating-systems/
+1. Download **Raspberry Pi OS Lite (64-bit, Trixie)** from https://www.raspberrypi.com/software/operating-systems/
 2. Flash to SD card using Raspberry Pi Imager.
 3. In Imager's advanced settings:
    - Enable SSH (password or key-based)
@@ -401,7 +401,7 @@ EOF
 
 ### 10.1 PipeWire as Default Audio
 
-PipeWire should be the default audio server on Bookworm. Verify:
+PipeWire should be the default audio server on Trixie. Verify:
 
 ```bash
 pactl info | grep "Server Name"
@@ -471,7 +471,7 @@ Run these checks after setup to confirm everything is ready:
 
 | # | Check | Command | Expected |
 | :- | :---- | :------ | :------- |
-| 1 | OS version | `cat /etc/os-release` | Bookworm, 64-bit |
+| 1 | OS version | `cat /etc/os-release` | Trixie, 64-bit |
 | 2 | Python version | `python3 --version` | 3.11+ |
 | 3 | BlueZ running | `systemctl status bluetooth` | active |
 | 4 | PipeWire running | `systemctl --user status pipewire` | active |

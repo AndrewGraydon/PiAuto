@@ -252,7 +252,7 @@ Audio is routed from the Pi over Bluetooth A2DP to a vehicle speaker (or speaker
 | :--- | :------------------------------------------------------------------------------------------ |
 | C-001| Target hardware is Raspberry Pi 4 Model B (4 GB RAM).                                      |
 | C-002| Display is a 7-inch 800×480 HDMI display with USB capacitive touch (LCDWiki 7inch HDMI Display-B). |
-| C-003| Operating system shall be Raspberry Pi OS Lite (Bookworm, 64-bit) with no desktop environment. |
+| C-003| Operating system shall be Raspberry Pi OS Lite (Trixie, 64-bit) with no desktop environment. |
 | C-004| The Android Auto protocol shall be handled by OpenAuto built on the aasdk library.          |
 | C-005| OpenAuto shall render via Qt EGLFS (direct KMS/DRM) — no X11 or Wayland compositor.        |
 | C-006| Orchestration and application code shall be written in Python 3.11+.                        |
