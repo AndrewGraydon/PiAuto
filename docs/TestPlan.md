@@ -595,7 +595,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-011 | H.264 Decode & Display            | D      | Pass    | 2026-03-28 | Video renders on 7" via Qt EGLFS + GStreamer |
 | TC-012 | PipeWire Audio Path               | T      | Pass    | 2026-03-28 | Audio through PipeWire → BT A2DP speaker |
 | TC-013 | Four Audio Streams                | D+I    | Pending |            |       |
-| TC-014 | Audio Focus / Ducking             | D      | Pending |            |       |
+| TC-014 | Audio Focus / Ducking             | D      | Pass    | 2026-03-28 | Nav voice ducks music, music resumes after |
 | TC-015 | BT A2DP Audio Output              | D      | Pass    | 2026-03-28 | Audio on BT speaker, not HDMI |
 | TC-016 | BT Audio Auto-Reconnect           | T      | Pending |            |       |
 | TC-017 | Touch Event Path                  | T      | Pass    | 2026-03-28 | Single-tap working after libinput fix |
@@ -620,7 +620,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-036 | BT_PAIRING Timeout                | T      | Pending |            |       |
 | TC-037 | TCP_CONNECT Timeout               | T      | Pending |            |       |
 | TC-038 | Boot Timeout                      | T      | Pending |            |       |
-| TC-039 | Missing/Corrupt Config File       | T      | Pending |            |       |
+| TC-039 | Missing/Corrupt Config File       | T      | Pass    | 2026-03-28 | Boots with defaults, logs warning, no crash |
 | TC-040 | Phone Volume → PipeWire Sync      | T      | Pass    | 2026-03-28 | AVRCP 34/127→0.27, 43/127→0.34 mapped to wpctl |
 | TC-041 | BT Speaker Pairing UI             | D      | Pass    | 2026-03-28 | Scan, pair, connect via touchscreen |
 | TC-042 | Return to Splash on Disconnect    | T      | Pass    | 2026-03-28 | onAndroidAutoQuit detected, splash shown |
