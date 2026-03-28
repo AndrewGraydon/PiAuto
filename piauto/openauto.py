@@ -18,7 +18,7 @@ from pathlib import Path
 
 from piauto.config import OpenAutoConfig
 from piauto.log import get_logger
-from piauto.splash import _detect_touchscreen_device
+from piauto.splash import detect_touchscreen_device
 
 log = get_logger("openauto")
 
@@ -138,7 +138,7 @@ class OpenAutoManager:
             "QT_QPA_GENERIC_PLUGINS": "evdevtouch",
             "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS": os.environ.get(
                 "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS",
-                _detect_touchscreen_device() + ":grab",
+                detect_touchscreen_device() + ":grab",
             ),
             # PipeWire/PulseAudio runs as user pi (uid 1000) — autoapp
             # runs as root but needs access to the PipeWire PulseAudio socket
@@ -173,18 +173,23 @@ class OpenAutoManager:
         if not self._proc or not self._proc.stdout:
             return
 
-        while True:
-            line = await self._proc.stdout.readline()
-            if not line:
-                break
-            text = line.decode(errors="replace").strip()
-            if text:
-                log.debug("OpenAuto(stdout): %s", text)
-                for pattern in PROJECTION_ACTIVE_PATTERNS:
-                    if pattern in text:
-                        log.info("Projection active detected (stdout): %s", text)
-                        self._projection_active.set()
-                        break
+        try:
+            while True:
+                line = await self._proc.stdout.readline()
+                if not line:
+                    break
+                text = line.decode(errors="replace").strip()
+                if text:
+                    log.debug("OpenAuto(stdout): %s", text)
+                    for pattern in PROJECTION_ACTIVE_PATTERNS:
+                        if pattern in text:
+                            log.info("Projection active detected (stdout): %s", text)
+                            self._projection_active.set()
+                            break
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error("stdout monitor failed: %s", exc)
 
     async def _monitor_output(self) -> None:
         """Read OpenAuto's stderr line by line, looking for projection status.
@@ -194,26 +199,31 @@ class OpenAutoManager:
         if not self._proc or not self._proc.stderr:
             return
 
-        while True:
-            line = await self._proc.stderr.readline()
-            if not line:
-                break  # process exited
+        try:
+            while True:
+                line = await self._proc.stderr.readline()
+                if not line:
+                    break  # process exited
 
-            text = line.decode(errors="replace").strip()
-            if text:
-                log.debug("OpenAuto: %s", text)
+                text = line.decode(errors="replace").strip()
+                if text:
+                    log.debug("OpenAuto: %s", text)
 
-            for pattern in PROJECTION_ACTIVE_PATTERNS:
-                if pattern in text:
-                    log.info("Projection active detected: %s", text)
-                    self._projection_active.set()
-                    break
+                for pattern in PROJECTION_ACTIVE_PATTERNS:
+                    if pattern in text:
+                        log.info("Projection active detected: %s", text)
+                        self._projection_active.set()
+                        break
 
-            for pattern in PROJECTION_STOPPED_PATTERNS:
-                if pattern in text:
-                    log.info("Projection stopped detected: %s", text)
-                    self._projection_stopped.set()
-                    break
+                for pattern in PROJECTION_STOPPED_PATTERNS:
+                    if pattern in text:
+                        log.info("Projection stopped detected: %s", text)
+                        self._projection_stopped.set()
+                        break
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error("stderr monitor failed: %s", exc)
 
     async def wait_for_listening(self, timeout: float = 15.0) -> bool:
         """Wait for autoapp to start listening on its TCP port (5000).

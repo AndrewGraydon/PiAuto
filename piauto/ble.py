@@ -7,7 +7,7 @@ Protocol architecture:
   2. Phone pairs over Classic Bluetooth (auto-accepted by our Agent1).
   3. Phone connects to RFCOMM profile — credential exchange via protobuf messages
      with 4-byte header framing.
-  4. Phone disconnects BT, joins WiFi AP, connects TCP port 5288 to OpenAuto.
+  4. Phone disconnects BT, joins WiFi AP, connects TCP port 5000 to OpenAuto.
 
 The credential exchange does NOT use BLE GATT characteristics. BLE is used only
 for discovery. The actual data exchange happens over a Classic BT RFCOMM socket

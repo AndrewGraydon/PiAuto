@@ -3,9 +3,9 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-TP-001                |
-| Version        | 3.1                          |
-| Date           | 2026-03-27                   |
-| Status         | Draft                        |
+| Version        | 4.0                          |
+| Date           | 2026-03-28                   |
+| Status         | Active                       |
 
 ## 1. Introduction
 
@@ -494,46 +494,136 @@ This document defines the verification approach for every requirement in PiAuto-
 
 ---
 
-## 19. Test Execution Checklist
+## 19. Test Cases — AVRCP Volume Sync
 
-| TC ID  | Description                    | Method | Status  | Date | Notes |
-| :----- | :----------------------------- | :----- | :------ | :--- | :---- |
-| TC-001 | WAA BLE Advertisement          | T      | Pending |      |       |
-| TC-002 | BLE Pairing & Handshake        | D      | Pending |      |       |
-| TC-003 | WifiStartRequest Delivery      | T      | Pending |      |       |
-| TC-004 | Pairing Record Persistence     | T      | Pending |      |       |
-| TC-005 | Auto-Reconnect                 | D      | Pending |      |       |
-| TC-006 | AP Configuration               | T      | Pending |      |       |
-| TC-007 | DHCP Lease Assignment          | T      | Pending |      |       |
-| TC-008 | TCP Listen Port 5000           | T      | Pending |      |       |
-| TC-009 | TLS + Version + Service Discovery | T   | Pending |      |       |
-| TC-010 | Reconnection on Loss           | T      | Pending |      |       |
-| TC-011 | H.264 Decode & Display         | D      | Pending |      |       |
-| TC-012 | PipeWire Audio Path            | T      | Pending |      |       |
-| TC-013 | Four Audio Streams             | D+I    | Pending |      |       |
-| TC-014 | Audio Focus / Ducking          | D      | Pending |      |       |
-| TC-015 | BT A2DP Audio Output           | D      | Pending |      |       |
-| TC-016 | BT Audio Auto-Reconnect        | T      | Pending |      |       |
-| TC-017 | Touch Event Path               | T      | Pending |      |       |
-| TC-018 | Multi-Touch                    | T      | Pending |      |       |
-| TC-019 | Ignition Sense Detection       | M      | Pending |      |       |
-| TC-020 | Clean Shutdown                 | M      | Pending |      |       |
-| TC-021 | Auto-Boot on Power             | T      | Pending |      |       |
-| TC-022 | Fan PWM Control                | M      | Pending |      |       |
-| TC-023 | Splash Screen                  | D      | Pending |      |       |
-| TC-024 | Night Mode Sensor              | T      | Pending |      |       |
-| TC-025 | Read-Only Root & /data         | I+T    | Pending |      |       |
-| TC-026 | Boot Time                      | M      | Pending |      |       |
-| TC-027 | Projection Latency             | M      | Pending |      |       |
-| TC-028 | Video Frame Rate               | M      | Pending |      |       |
-| TC-029 | Audio Latency                  | M      | Pending |      |       |
-| TC-030 | Connection Setup Time          | M      | Pending |      |       |
-| TC-031 | Power-Loss Resilience          | T      | Pending |      |       |
-| TC-032 | 12-Hour Soak Test              | T      | Pending |      |       |
-| TC-033 | Config & Logging Inspection    | I      | Pending |      |       |
-| TC-034 | BT Speaker Mid-Session Disconnect | T   | Pending |      |       |
-| TC-035 | Clock Initialization (No RTC)  | T+I    | Pending |      |       |
-| TC-036 | BT_PAIRING Timeout             | T      | Pending |      |       |
-| TC-037 | TCP_CONNECT Timeout            | T      | Pending |      |       |
-| TC-038 | Boot Timeout                   | T      | Pending |      |       |
-| TC-039 | Missing/Corrupt Config File    | T      | Pending |      |       |
+### TC-040: Phone Volume Controls PipeWire Output
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-020                                                  |
+| Method       | T                                                       |
+| Precondition | PROJECTION_ACTIVE, music playing on BT speaker          |
+| Procedure    | 1. Press phone volume up — verify speaker gets louder. 2. Press phone volume down — verify speaker gets quieter. 3. On Pi, run `journalctl -u piauto --since '5 min ago' \| grep AVRCP` — verify volume sync log entries. 4. Run `wpctl get-volume @DEFAULT_AUDIO_SINK@` — verify value changes with phone volume. |
+| Pass Criteria| Phone volume buttons change BT speaker output level. PipeWire sink volume tracks AVRCP 0–127 mapped to 0.0–1.0. |
+
+---
+
+## 20. Test Cases — BT Speaker Pairing UI
+
+### TC-041: Touchscreen BT Speaker Scan and Pair
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-045, FR-046                                          |
+| Method       | D                                                       |
+| Precondition | System in IDLE, BT speaker in pairing mode, no speaker previously paired |
+| Procedure    | 1. Tap "Setup" button on splash screen. 2. Verify BT setup UI appears. 3. Tap "Scan" — verify speaker appears in device list. 4. Tap the speaker entry — verify pairing succeeds (green confirmation). 5. Tap "Back" — verify return to idle splash. 6. Connect phone and play music — verify audio on newly paired speaker. |
+| Pass Criteria| Speaker discovered, paired, and connected via touchscreen UI. Audio plays on speaker after AA connection. |
+
+---
+
+## 21. Test Cases — Phone Disconnect Recovery
+
+### TC-042: Return to Splash on Phone Disconnect
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-038, SM §3.6                                         |
+| Method       | T                                                       |
+| Precondition | PROJECTION_ACTIVE                                       |
+| Procedure    | 1. On phone, disconnect from Android Auto (Settings → Connected devices → Disconnect). 2. Verify Pi display returns to splash screen ("Waiting for phone...") within 10 s. 3. Verify `journalctl -u piauto` shows "Projection stopped detected" and transition to IDLE. 4. Reconnect phone — verify AA projection resumes. |
+| Pass Criteria| Display returns to splash on disconnect. State machine transitions PROJECTION_ACTIVE → IDLE. Reconnection works without reboot. |
+
+---
+
+## 22. Test Cases — Touchscreen Input
+
+### TC-043: Single-Tap Response (No Double-Tap Required)
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-027, FR-028                                          |
+| Method       | T                                                       |
+| Precondition | PROJECTION_ACTIVE                                       |
+| Procedure    | 1. Single-tap an AA button (e.g., Home, Media). 2. Verify button activates on first tap. 3. Repeat on 5 different buttons across the screen. 4. Verify `QT_QPA_EGLFS_NO_LIBINPUT=1` is set in the OpenAuto process environment via `cat /proc/<pid>/environ \| tr '\0' '\n' \| grep LIBINPUT`. |
+| Pass Criteria| All buttons activate on single tap. No double-tap needed. libinput disabled in process env. |
+
+---
+
+## 23. Test Cases — Dual BT Adapter
+
+### TC-044: USB BT Dongle for Speaker Audio
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-025, NR-003                                          |
+| Method       | T                                                       |
+| Precondition | USB BT dongle inserted, BT speaker paired to hci1       |
+| Procedure    | 1. Verify two adapters: `hciconfig -a` shows hci0 (built-in) and hci1 (USB). 2. Verify speaker connected via hci1: `bluetoothctl info 04:52:C7:8C:3D:CC` shows adapter path includes hci1. 3. Play music via AA for 5 minutes. 4. Verify no audio stuttering (WiFi and BT on separate radios). |
+| Pass Criteria| Two BT adapters present. Speaker on USB adapter. No audio stuttering during WiFi+BT concurrent use. |
+
+---
+
+## 24. Test Cases — AP+STA Dual Interface
+
+### TC-045: Simultaneous AP and Infrastructure WiFi
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-006                                                  |
+| Method       | T                                                       |
+| Precondition | uap0 virtual interface created by udev rule             |
+| Procedure    | 1. Verify `ip link show uap0` exists and is UP. 2. Verify `iw dev uap0 info` shows AP mode. 3. Verify `iw dev wlan0 info` shows Managed (STA) mode. 4. From Pi, ping an external host (e.g., gateway) to confirm STA connectivity. 5. Simultaneously verify phone is connected to AP on uap0. 6. SSH to Pi over wlan0 while AA projection is active on uap0. |
+| Pass Criteria| Both interfaces active simultaneously. AP serves phone on uap0. STA maintains infrastructure connectivity on wlan0. SSH works during projection. |
+
+---
+
+## 25. Test Execution Checklist
+
+| TC ID  | Description                       | Method | Status  | Date       | Notes |
+| :----- | :-------------------------------- | :----- | :------ | :--------- | :---- |
+| TC-001 | WAA BLE Advertisement             | T      | Pass    | 2026-03-28 | Phone discovers PiAuto via WAA BLE scan |
+| TC-002 | BLE Pairing & Handshake           | D      | Pass    | 2026-03-28 | RFCOMM NewConnection received, IDLE → BT_PAIRING |
+| TC-003 | WifiStartRequest Delivery         | T      | Pass    | 2026-03-28 | Credentials exchanged, state → WIFI_WAIT |
+| TC-004 | Pairing Record Persistence        | T      | Pending |            |       |
+| TC-005 | Auto-Reconnect                    | D      | Pending |            |       |
+| TC-006 | AP Configuration                  | T      | Partial | 2026-03-28 | AP running, phone connects; 5 GHz channel not formally verified |
+| TC-007 | DHCP Lease Assignment             | T      | Pass    | 2026-03-28 | Phone received IP on AP subnet |
+| TC-008 | TCP Listen Port 5000              | T      | Pass    | 2026-03-28 | Verified via `ss -tlnH` during BT_PAIRING |
+| TC-009 | TLS + Version + Service Discovery | T      | Pass    | 2026-03-28 | AA projection fully operational |
+| TC-010 | Reconnection on Loss              | T      | Pending |            |       |
+| TC-011 | H.264 Decode & Display            | D      | Pass    | 2026-03-28 | Video renders on 7" via Qt EGLFS + GStreamer |
+| TC-012 | PipeWire Audio Path               | T      | Pass    | 2026-03-28 | Audio through PipeWire → BT A2DP speaker |
+| TC-013 | Four Audio Streams                | D+I    | Pending |            |       |
+| TC-014 | Audio Focus / Ducking             | D      | Pending |            |       |
+| TC-015 | BT A2DP Audio Output              | D      | Pass    | 2026-03-28 | Audio on BT speaker, not HDMI |
+| TC-016 | BT Audio Auto-Reconnect           | T      | Pending |            |       |
+| TC-017 | Touch Event Path                  | T      | Pass    | 2026-03-28 | Single-tap working after libinput fix |
+| TC-018 | Multi-Touch                       | T      | Pending |            |       |
+| TC-019 | Ignition Sense Detection          | M      | Blocked |            | GPIO 17 not wired yet |
+| TC-020 | Clean Shutdown                    | M      | Blocked |            | Requires ignition GPIO |
+| TC-021 | Auto-Boot on Power                | T      | Pending |            |       |
+| TC-022 | Fan PWM Control                   | M      | Blocked |            | Fan not connected yet |
+| TC-023 | Splash Screen                     | D      | Pass    | 2026-03-28 | Status text shown, transitions to AA |
+| TC-024 | Night Mode Sensor                 | T      | Pending |            |       |
+| TC-025 | Read-Only Root & /data            | I+T    | Pending |            |       |
+| TC-026 | Boot Time                         | M      | Pending |            |       |
+| TC-027 | Projection Latency                | M      | Pending |            | Requires camera setup |
+| TC-028 | Video Frame Rate                  | M      | Pending |            |       |
+| TC-029 | Audio Latency                     | M      | Pending |            | Requires recording equipment |
+| TC-030 | Connection Setup Time             | M      | Pending |            |       |
+| TC-031 | Power-Loss Resilience             | T      | Pending |            |       |
+| TC-032 | 12-Hour Soak Test                 | T      | Pending |            |       |
+| TC-033 | Config & Logging Inspection       | I      | Pending |            |       |
+| TC-034 | BT Speaker Mid-Session Disconnect | T      | Pending |            |       |
+| TC-035 | Clock Initialization (No RTC)     | T+I    | Pending |            |       |
+| TC-036 | BT_PAIRING Timeout                | T      | Pending |            |       |
+| TC-037 | TCP_CONNECT Timeout               | T      | Pending |            |       |
+| TC-038 | Boot Timeout                      | T      | Pending |            |       |
+| TC-039 | Missing/Corrupt Config File       | T      | Pending |            |       |
+| TC-040 | Phone Volume → PipeWire Sync      | T      | Pass    | 2026-03-28 | AVRCP volume mapped to wpctl |
+| TC-041 | BT Speaker Pairing UI             | D      | Pass    | 2026-03-28 | Scan, pair, connect via touchscreen |
+| TC-042 | Return to Splash on Disconnect    | T      | Pending |            |       |
+| TC-043 | Single-Tap (No Double-Tap)        | T      | Pass    | 2026-03-28 | libinput disabled, evdevtouch:grab |
+| TC-044 | USB BT Dongle for Speaker         | T      | Pass    | 2026-03-28 | hci1 USB, no stuttering |
+| TC-045 | AP+STA Dual Interface             | T      | Pending |            |       |

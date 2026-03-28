@@ -39,17 +39,17 @@ class GpioManager:
         self._fan_request = None
         self._running = False
 
-    async def setup(self) -> None:
-        """Open GPIO chip and configure lines."""
+    async def setup(self) -> bool:
+        """Open GPIO chip and configure lines. Returns True on success."""
         if not _gpiod_available:
             log.warning("GPIO setup skipped — not on Pi hardware")
-            return
+            return False
 
         try:
             self._chip = gpiod.Chip("/dev/gpiochip4")
         except (FileNotFoundError, PermissionError) as exc:
             log.warning("Cannot open GPIO chip: %s — running in mock mode", exc)
-            return
+            return False
 
         # Ignition sense: input with pull-up, watch falling edge
         self._ignition_request = self._chip.request_lines(
@@ -77,6 +77,7 @@ class GpioManager:
         )
 
         log.info("GPIO initialized: ignition=GPIO%d, fan=GPIO%d", IGNITION_PIN, FAN_PIN)
+        return True
 
     async def monitor_ignition(
         self,

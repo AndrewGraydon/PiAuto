@@ -1,5 +1,7 @@
 """Bluetooth BR/EDR discovery and pairing via dbus-next.
 
+Satisfies: FR-045 (BT speaker pairing UI), FR-046 (audio output device selection).
+
 Provides CLI commands for the splash screen BT setup UI:
   python3 -m piauto.bt_pair scan     — BR/EDR discovery, prints DEVICE lines
   python3 -m piauto.bt_pair pair MAC — register agent, trust, pair, connect

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 from pathlib import Path
 
 from piauto.config import WifiConfig
@@ -157,18 +156,20 @@ class WifiManager:
                 return False
         return True
 
-    def _check_nm_managed_ap(self) -> bool:
+    async def _check_nm_managed_ap(self) -> bool:
         """Check if NetworkManager is already managing an AP on our interface."""
         try:
-            result = subprocess.run(
-                ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "dev", "status"],
-                capture_output=True, text=True, timeout=5,
+            proc = await asyncio.create_subprocess_exec(
+                "nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "dev", "status",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
             )
-            for line in result.stdout.strip().splitlines():
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            for line in stdout.decode().strip().splitlines():
                 parts = line.split(":")
                 if len(parts) >= 3 and parts[0] == self._interface and parts[2] == "connected":
                     return True
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except (FileNotFoundError, TimeoutError):
             pass
         return False
 
@@ -187,7 +188,7 @@ class WifiManager:
             return True
 
         # Check if NetworkManager is already running the AP
-        if self._check_nm_managed_ap():
+        if await self._check_nm_managed_ap():
             self._nm_managed = True
             log.info("AP already managed by NetworkManager on %s — skipping hostapd/dnsmasq",
                      self._interface)

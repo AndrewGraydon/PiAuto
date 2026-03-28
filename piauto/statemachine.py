@@ -1,5 +1,8 @@
 """PiAuto state machine — the central orchestrator.
 
+Satisfies: FR-033 (ignition-off shutdown), FR-034 (auto-boot on ignition),
+           FR-038 to FR-041 (error recovery, retry logic, state transitions),
+           FR-044 (graceful degradation).
 Implements PiAuto-SM-001 v3.0. Every runtime behavior is driven by this
 state machine. It manages the connection lifecycle (BLE → WiFi → OpenAuto)
 and monitors GPIO 17 for ignition-off events.
@@ -283,13 +286,17 @@ class StateMachine:
             except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
                 pass
 
-        phone = phone_task.result()
+        try:
+            phone = phone_task.result()
+        except Exception as exc:
+            log.error("Phone detection failed: %s", exc)
+            phone = None
+
         if phone:
             self._current_phone = phone
             log.info("Phone detected: %s (%s)", phone.name, phone.mac)
             self._transition(State.BT_PAIRING, Event.PHONE_DETECTED)
         else:
-            # Shouldn't happen unless cancelled — stay in IDLE
             log.debug("Phone detection returned None — remaining in IDLE")
 
     async def _handle_bt_setup(self) -> None:
@@ -478,7 +485,7 @@ class StateMachine:
 
         # Stop volume sync when leaving PROJECTION_ACTIVE
         if self._volume:
-            self._volume.stop()
+            await self._volume.stop()
 
         if ignition_task in done:
             self._transition(State.SHUTDOWN, Event.IGNITION_OFF)

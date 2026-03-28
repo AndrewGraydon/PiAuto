@@ -1,5 +1,8 @@
 """AVRCP volume sync — maps BT AVRCP volume to PipeWire sink.
 
+Satisfies: FR-020 (audio output control via PipeWire).
+See PiAuto-IG-001 §13.
+
 The AA protocol sends raw PCM audio with no volume control messages.
 The phone's volume buttons change its BT AVRCP volume (a side-effect
 of the WAA BT connection). This module polls that AVRCP value and
@@ -9,7 +12,6 @@ maps it to the PipeWire default audio sink via wpctl.
 from __future__ import annotations
 
 import asyncio
-import subprocess
 
 from piauto.log import get_logger
 
@@ -23,7 +25,7 @@ class VolumeSyncManager:
     """Polls BlueZ MediaTransport1.Volume and syncs to PipeWire."""
 
     def __init__(self) -> None:
-        self._task: asyncio.Task | None = None
+        self._poll_task: asyncio.Task | None = None
         self._last_volumes: dict[str, int] = {}
         self._dbus_available = False
         try:
@@ -36,16 +38,20 @@ class VolumeSyncManager:
         """Start the background volume sync task."""
         if not self._dbus_available:
             return
-        if self._task and not self._task.done():
+        if self._poll_task and not self._poll_task.done():
             return
-        self._task = asyncio.create_task(self._poll_loop())
+        self._poll_task = asyncio.create_task(self._poll_loop())
         log.info("AVRCP volume sync started")
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """Stop the background volume sync task."""
-        if self._task:
-            self._task.cancel()
-            self._task = None
+        if self._poll_task:
+            self._poll_task.cancel()
+            try:
+                await self._poll_task
+            except asyncio.CancelledError:
+                pass
+            self._poll_task = None
             log.info("AVRCP volume sync stopped")
 
     async def _poll_loop(self) -> None:

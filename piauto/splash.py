@@ -83,7 +83,7 @@ def write_eglfs_config(
     return EGLFS_CONFIG_PATH
 
 
-def _detect_touchscreen_device() -> str:
+def detect_touchscreen_device() -> str:
     """Find the evdev node for the USB touchscreen.
 
     Scans /proc/bus/input/devices for a device with INPUT_PROP_DIRECT
@@ -145,7 +145,7 @@ class SplashManager:
             "QT_QPA_GENERIC_PLUGINS": "evdevtouch",
             "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS": os.environ.get(
                 "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS",
-                _detect_touchscreen_device() + ":grab",
+                detect_touchscreen_device() + ":grab",
             ),
         }
 
