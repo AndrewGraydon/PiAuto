@@ -164,7 +164,8 @@ class BleManager:
         """Connect to the system D-Bus and verify BlueZ is available."""
         try:
             from dbus_next.aio import MessageBus
-            self._bus = await MessageBus(bus_type=2).connect()  # system bus
+            from dbus_next import BusType
+            self._bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
         except Exception as exc:
             log.warning("Cannot connect to system D-Bus: %s — BLE in mock mode", exc)
             return False

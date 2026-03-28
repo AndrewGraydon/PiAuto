@@ -168,8 +168,10 @@ class WifiManager:
 
     async def stop_ap(self) -> None:
         """Stop hostapd and dnsmasq, release interface."""
+        was_running = False
         for name, proc in [("hostapd", self._hostapd_proc), ("dnsmasq", self._dnsmasq_proc)]:
             if proc and proc.returncode is None:
+                was_running = True
                 proc.terminate()
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=5)
@@ -181,15 +183,18 @@ class WifiManager:
         self._hostapd_proc = None
         self._dnsmasq_proc = None
 
-        # Flush the interface IP
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "ip", "addr", "flush", "dev", AP_INTERFACE,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.wait()
-        except FileNotFoundError:
-            pass
-
-        log.info("AP stopped")
+        # Only flush the interface if we actually started the AP —
+        # otherwise we'd wipe the user's existing WiFi connection
+        if was_running:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "ip", "addr", "flush", "dev", AP_INTERFACE,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
+            except FileNotFoundError:
+                pass
+            log.info("AP stopped")
+        else:
+            log.debug("AP was not running — nothing to stop")
