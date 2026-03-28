@@ -243,38 +243,52 @@ chmod 600 /data/tls/key.pem
 
 ### 9.1 Technology
 
-A minimal Python script using **PyQt5** with `QT_QPA_PLATFORM=eglfs`. It displays a full-screen window with status text, a "Setup" button, and supports a dedicated Bluetooth speaker pairing UI mode.
+A single long-lived Python script using **PyQt5** with `QT_QPA_PLATFORM=eglfs`. It uses a `QStackedWidget` to switch between views (idle splash, BT setup) without releasing DRM master, preventing console text from flashing between transitions.
 
-### 9.2 IPC with State Machine
+### 9.2 Single-Process Architecture
 
-The splash app communicates with the state machine via **stdout lines**. The state machine reads these with `SplashManager.read_stdout_line()`:
+The splash runs as **one process for its entire lifetime**. The state machine sends commands via **stdin** to switch views, and the splash sends signals back via **stdout**:
+
+**Commands (state machine → splash, via stdin):**
+
+| Command | Effect |
+| :------ | :----- |
+| `STATUS\|text` | Switch to idle view, display `text` |
+| `BT_SETUP` | Switch to Bluetooth speaker setup view |
+
+**Signals (splash → state machine, via stdout):**
 
 | Signal | Meaning | Triggered By |
 | :----- | :------ | :----------- |
 | `SETUP` | User tapped the Setup button | Idle splash screen |
 | `BACK` | User tapped Back in BT setup | BT setup UI |
-| `PAIRED:mac:name` | Successfully paired a BT speaker | BT setup UI |
+| `PAIRED\|mac\|name` | Successfully paired a BT speaker | BT setup UI |
 
-**Modes:**
+> **Why a single process?** Qt EGLFS acquires exclusive DRM master. If you kill one Qt process and launch another, the Linux VT console is briefly visible between DRM master release and reacquisition. A `QStackedWidget` switches views instantly within the same process, keeping the display seamless.
+
+**Launch:**
 
 ```bash
-# Status display (IDLE, BT_PAIRING, WIFI_WAIT, etc.):
-QT_QPA_PLATFORM=eglfs python3 -m piauto.splash "Waiting for phone..."
-
-# Bluetooth speaker setup UI:
-QT_QPA_PLATFORM=eglfs python3 -m piauto.splash --bt-setup
+QT_QPA_PLATFORM=eglfs python3 -m piauto.splash
+# Optionally pass initial status text as arg:
+QT_QPA_PLATFORM=eglfs python3 -m piauto.splash "Starting..."
 ```
 
 ### 9.3 Bluetooth Speaker Setup UI
 
-The `--bt-setup` mode provides a touchscreen-driven UI for BR/EDR speaker discovery and pairing:
+The BT setup view (activated by `BT_SETUP` stdin command) provides a touchscreen-driven UI for BR/EDR speaker discovery and pairing:
 
 1. User taps "Scan" — launches `piauto.bt_pair scan` via QProcess
 2. Discovered devices appear as tappable buttons
 3. User taps a device — launches `piauto.bt_pair pair MAC` via QProcess
-4. On success (`PAIR_OK`), writes `PAIRED:mac:name` to stdout for the state machine
+4. On success (`PAIR_OK`), writes `PAIRED|mac|name` to stdout for the state machine
+5. User taps "Back" — writes `BACK` to stdout, splash switches back to idle view
 
 > **Note:** The bt_pair subprocess is launched as the `pi` user via `sudo -u pi` because BR/EDR discovery as root misses some devices due to BlueZ D-Bus policy differences.
+
+### 9.4 SIGTERM Handling
+
+Qt's event loop blocks in `app.exec_()`, so SIGTERM cannot call `app.quit()` directly from a signal handler. The splash uses a `socket.socketpair()` with a `QSocketNotifier` to relay SIGTERM into Qt's event loop safely.
 
 ### 9.3 DRM Master Handoff
 

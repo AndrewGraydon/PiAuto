@@ -181,7 +181,7 @@ graph TD
 
 | Component       | Technology          | Satisfies              | Description |
 | :-------------- | :------------------ | :--------------------- | :---------- |
-| Qt 5 EGLFS      | Qt 5.15, EGLFS plugin | FR-017, FR-036, FR-037 | Direct KMS/DRM rendering without X11 or Wayland. Qt's EGLFS plugin renders OpenAuto's UI directly to the HDMI framebuffer. Also used by the orchestrator for the splash screen (via a lightweight Qt app or shared framebuffer). |
+| Qt 5 EGLFS      | Qt 5.15, EGLFS plugin | FR-017, FR-036, FR-037 | Direct KMS/DRM rendering without X11 or Wayland. Qt's EGLFS plugin renders OpenAuto's UI directly to the HDMI framebuffer. Also used by the splash screen — a single long-lived Qt process with `QStackedWidget` that switches views (idle, BT setup) via stdin commands without releasing DRM master. |
 | V4L2 Decoder    | Linux V4L2 API      | FR-016, PR-003         | Hardware H.264 Baseline Profile decoding on the Pi 4's VideoCore VI. OpenAuto feeds NAL units to V4L2 and receives decoded frames for rendering. |
 | PipeWire        | PipeWire 0.3+       | FR-020 to FR-026, PR-004 | Receives AA audio streams from OpenAuto, mixes them per AA audio focus rules, and routes the output to the BlueZ A2DP sink. |
 
@@ -284,11 +284,11 @@ All processes except `piauto-main` are managed as systemd services. `piauto-main
 **Process lifecycle during a typical session:**
 
 1. **Boot:** systemd starts `bluetoothd`, `pipewire`, `wireplumber`, then `piauto-main`.
-2. **IDLE:** `piauto-main` advertises BLE, displays splash via a lightweight Qt EGLFS app.
+2. **IDLE:** `piauto-main` advertises BLE, launches splash Qt process (single long-lived process with `QStackedWidget` for view switching). User can tap "Setup" to enter BT speaker pairing without restarting the process.
 3. **BT_PAIRING → WIFI_WAIT:** `piauto-main` starts `hostapd` + `dnsmasq`.
-4. **TCP_CONNECT:** `piauto-main` launches `openauto` process (Qt EGLFS). The splash app exits (releases DRM master). OpenAuto takes over the display and listens on TCP 5288.
+4. **TCP_CONNECT:** `piauto-main` kills the splash process (releases DRM master), launches `openauto` (Qt EGLFS). OpenAuto takes over the display and listens on TCP 5288.
 5. **PROJECTION_ACTIVE:** OpenAuto handles everything. `piauto-main` monitors OpenAuto's process and GPIO 17.
-6. **Disconnect:** OpenAuto exits. `piauto-main` reclaims the display (restarts splash app), stops `hostapd`, returns to IDLE.
+6. **Disconnect:** OpenAuto exits. `piauto-main` reclaims the display (relaunches splash), stops `hostapd`, returns to IDLE.
 7. **Shutdown:** `piauto-main` kills all child processes, runs `shutdown -h now`.
 
 ---

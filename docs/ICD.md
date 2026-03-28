@@ -534,7 +534,7 @@ The Python state machine (`piauto-main`) communicates with system services and m
 | OpenAuto       | Process management (fork/exec) | Launch with command-line args (resolution, audio config). Monitor process. Parse stderr for status events. Detect exit code for clean vs error shutdown. |
 | PipeWire       | systemd (user service)     | Always running; WirePlumber handles routing policy automatically |
 | GPIO / Thermal | libgpiod Python bindings   | Direct function calls within piauto-main process |
-| Splash Screen  | Separate Qt EGLFS app      | Lightweight splash app started by piauto-main. Killed when OpenAuto launches (to release DRM master). Restarted when OpenAuto exits. |
+| Splash Screen  | Single Qt EGLFS process (stdin/stdout IPC) | Long-lived Qt process with `QStackedWidget` for view switching (idle, BT setup). State machine sends commands via stdin (`STATUS\|text`, `BT_SETUP`), receives signals via stdout (`SETUP`, `BACK`, `PAIRED\|mac\|name`). Killed only for OpenAuto DRM handoff; restarted when OpenAuto exits. |
 
 ### 13.3 OpenAuto Launch Parameters
 
