@@ -9,6 +9,7 @@ Uses libgpiod v2 Python bindings. Gracefully degrades on non-Pi machines.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from typing import Callable
 
 from piauto.log import get_logger
@@ -57,7 +58,7 @@ class GpioManager:
                     direction=Direction.INPUT,
                     bias=Bias.PULL_UP,
                     edge_detection=Edge.FALLING,
-                    debounce_period=None,  # software debounce handled below
+                    debounce_period=timedelta(0),  # software debounce handled below
                 ),
             },
             consumer="piauto-ignition",

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import os
 import subprocess
 import time
 
@@ -482,13 +483,16 @@ class StateMachine:
         save_time()
 
         self._running = False
-        log.info("Shutdown complete — issuing system halt")
 
-        # Execute system shutdown
-        try:
-            subprocess.run(["shutdown", "-h", "now"], check=False)
-        except FileNotFoundError:
-            log.info("'shutdown' not available (dev machine?) — exiting normally")
+        # Execute system shutdown (skip if PIAUTO_NO_HALT is set — for testing)
+        if os.environ.get("PIAUTO_NO_HALT"):
+            log.info("Shutdown complete — PIAUTO_NO_HALT set, not halting system")
+        else:
+            log.info("Shutdown complete — issuing system halt")
+            try:
+                subprocess.run(["shutdown", "-h", "now"], check=False)
+            except FileNotFoundError:
+                log.info("'shutdown' not available (dev machine?) — exiting normally")
 
     # ── Ignition callback ────────────────────────────────────
 
