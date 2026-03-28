@@ -621,7 +621,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-037 | TCP_CONNECT Timeout               | T      | Pending |            |       |
 | TC-038 | Boot Timeout                      | T      | Pending |            |       |
 | TC-039 | Missing/Corrupt Config File       | T      | Pending |            |       |
-| TC-040 | Phone Volume → PipeWire Sync      | T      | Pass    | 2026-03-28 | AVRCP volume mapped to wpctl |
+| TC-040 | Phone Volume → PipeWire Sync      | T      | Pass    | 2026-03-28 | AVRCP 34/127→0.27, 43/127→0.34 mapped to wpctl |
 | TC-041 | BT Speaker Pairing UI             | D      | Pass    | 2026-03-28 | Scan, pair, connect via touchscreen |
 | TC-042 | Return to Splash on Disconnect    | T      | Pass    | 2026-03-28 | onAndroidAutoQuit detected, splash shown |
 | TC-043 | Single-Tap (No Double-Tap)        | T      | Pass    | 2026-03-28 | libinput disabled, evdevtouch:grab |
