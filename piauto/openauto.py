@@ -36,9 +36,12 @@ PROJECTION_ACTIVE_PATTERNS = [
 ]
 
 # Pattern indicating OpenAuto has quit or the phone disconnected.
+# Error 33 = AASDK connection reset; onStopPlayback = video stream ended.
 PROJECTION_STOPPED_PATTERNS = [
     "[WifiProjectionService] stop()",
     "onAndroidAutoQuit",
+    "onStopPlayback()",
+    "AASDK Error: 33",
 ]
 
 
@@ -185,6 +188,11 @@ class OpenAutoManager:
                         if pattern in text:
                             log.info("Projection active detected (stdout): %s", text)
                             self._projection_active.set()
+                            break
+                    for pattern in PROJECTION_STOPPED_PATTERNS:
+                        if pattern in text:
+                            log.info("Projection stopped detected (stdout): %s", text)
+                            self._projection_stopped.set()
                             break
         except asyncio.CancelledError:
             raise
