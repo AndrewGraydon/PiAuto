@@ -25,13 +25,17 @@ TLS_CERT_DIR = Path("/data/tls")
 TLS_KEY = TLS_CERT_DIR / "key.pem"
 TLS_CERT = TLS_CERT_DIR / "cert.pem"
 
-# Pattern in OpenAuto's output indicating projection is active.
-# This must be determined from the OpenAuto source and documented
-# in the build notes. Common patterns from the community:
+# Patterns in OpenAuto's log output indicating projection is active.
+# Based on OpenAuto source: VideoMediaSinkService logs when video starts.
 PROJECTION_ACTIVE_PATTERNS = [
-    "Projection started",
-    "Service: MediaSink started",
-    "projection active",
+    "[VideoMediaSinkService] start()",
+    "[VideoService] start",
+]
+
+# Pattern indicating OpenAuto has quit or the phone disconnected.
+PROJECTION_STOPPED_PATTERNS = [
+    "[WifiProjectionService] stop()",
+    "onAndroidAutoQuit",
 ]
 
 
@@ -83,7 +87,8 @@ class OpenAutoManager:
         self._config = config
         self._proc: asyncio.subprocess.Process | None = None
         self._projection_active = asyncio.Event()
-        self._stderr_task: asyncio.Task | None = None
+        self._projection_stopped = asyncio.Event()
+        self._monitor_task: asyncio.Task | None = None
 
     async def launch(self) -> bool:
         """Launch OpenAuto as a subprocess. Returns True if started successfully."""
@@ -97,29 +102,37 @@ class OpenAutoManager:
         env = {
             **os.environ,
             "QT_QPA_PLATFORM": "eglfs",
-            "QT_QPA_EGLFS_KMS_CONFIG": "/data/eglfs.json",
+            "QT_QPA_EGLFS_KMS_CONFIG": os.environ.get(
+                "QT_QPA_EGLFS_KMS_CONFIG", "/data/eglfs.json"
+            ),
         }
 
         try:
+            # cwd=/data so OpenAuto reads /data/openauto.ini
             self._proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                cwd="/data",
             )
             log.info("OpenAuto launched (pid %d): %s", self._proc.pid, " ".join(cmd))
         except (FileNotFoundError, PermissionError) as exc:
             log.error("Failed to launch OpenAuto: %s", exc)
             return False
 
-        # Start background task to parse stderr for projection status
+        # Start background task to parse output for projection status
         self._projection_active.clear()
-        self._stderr_task = asyncio.create_task(self._monitor_stderr())
+        self._projection_stopped.clear()
+        self._monitor_task = asyncio.create_task(self._monitor_output())
 
         return True
 
-    async def _monitor_stderr(self) -> None:
-        """Read OpenAuto's stderr line by line, looking for projection status."""
+    async def _monitor_output(self) -> None:
+        """Read OpenAuto's stderr line by line, looking for projection status.
+
+        OpenAuto uses Boost.Log which writes to stderr by default.
+        """
         if not self._proc or not self._proc.stderr:
             return
 
@@ -133,9 +146,15 @@ class OpenAutoManager:
                 log.debug("OpenAuto: %s", text)
 
             for pattern in PROJECTION_ACTIVE_PATTERNS:
-                if pattern.lower() in text.lower():
+                if pattern in text:
                     log.info("Projection active detected: %s", text)
                     self._projection_active.set()
+                    break
+
+            for pattern in PROJECTION_STOPPED_PATTERNS:
+                if pattern in text:
+                    log.info("Projection stopped detected: %s", text)
+                    self._projection_stopped.set()
                     break
 
     async def wait_for_ready(self, timeout: float = 30.0) -> bool:
@@ -179,13 +198,13 @@ class OpenAutoManager:
 
         code = await self._proc.wait()
 
-        if self._stderr_task:
-            self._stderr_task.cancel()
+        if self._monitor_task:
+            self._monitor_task.cancel()
             try:
-                await self._stderr_task
+                await self._monitor_task
             except asyncio.CancelledError:
                 pass
-            self._stderr_task = None
+            self._monitor_task = None
 
         log.info("OpenAuto exited with code %s", code)
         return code
@@ -205,13 +224,13 @@ class OpenAutoManager:
             self._proc.kill()
             await self._proc.wait()
 
-        if self._stderr_task:
-            self._stderr_task.cancel()
+        if self._monitor_task:
+            self._monitor_task.cancel()
             try:
-                await self._stderr_task
+                await self._monitor_task
             except asyncio.CancelledError:
                 pass
-            self._stderr_task = None
+            self._monitor_task = None
 
     @property
     def is_running(self) -> bool:

@@ -99,8 +99,14 @@ sudo apt install -y \
     libprotobuf-dev \
     libssl-dev \
     libboost-all-dev \
+    libusb-1.0-0-dev \
     qtmultimedia5-dev \
-    libqt5websockets5-dev
+    qtconnectivity5-dev \
+    libqt5websockets5-dev \
+    libqt5svg5-dev \
+    librtaudio-dev \
+    libtag-dev \
+    libgps-dev
 ```
 
 ---
@@ -109,17 +115,24 @@ sudo apt install -y \
 
 ### 4.1 Build aasdk
 
+The upstream aasdk (opencardev/aasdk) already includes `TCPTransport` for wireless AA.
+
 ```bash
 cd /opt
 sudo git clone https://github.com/opencardev/aasdk.git
 cd aasdk
-sudo git checkout <stable-tag>  # Pin to latest stable tag
 
 sudo mkdir build && cd build
-sudo cmake -DCMAKE_BUILD_TYPE=Release ..
+sudo cmake -DCMAKE_BUILD_TYPE=Release \
+    -DSKIP_BUILD_PROTOBUF=ON \
+    -DSKIP_BUILD_ABSL=ON \
+    ..
 sudo make -j$(nproc)
 sudo make install
+sudo ldconfig
 ```
+
+> **Note:** `-DSKIP_BUILD_PROTOBUF=ON -DSKIP_BUILD_ABSL=ON` uses the system protobuf (3.21) instead of downloading protobuf v30 + abseil, which avoids build conflicts on Trixie.
 
 ### 4.2 Build OpenAuto
 
@@ -127,26 +140,54 @@ sudo make install
 cd /opt
 sudo git clone https://github.com/opencardev/openauto.git
 cd openauto
-sudo git checkout <stable-tag>  # Pin to latest stable tag
 
 sudo mkdir build && cd build
-sudo cmake -DCMAKE_BUILD_TYPE=Release \
-    -DAASDK_INCLUDE_DIR=/usr/local/include \
-    -DAASDK_LIBRARY=/usr/local/lib/libaasdk.so \
-    ..
+sudo cmake -DCMAKE_BUILD_TYPE=Release -DNOPI=ON ..
 sudo make -j$(nproc)
 sudo make install
 ```
 
-### 4.3 Record Build Info
+> **Note:** `-DNOPI=ON` disables the Broadcom OMX/VideoCore (`bcm_host.h`) video path which doesn't exist on Trixie. Video output uses Qt's rendering pipeline instead. The resulting binary is `/usr/local/bin/autoapp`.
+
+### 4.3 Create OpenAuto Configuration
 
 ```bash
-echo "aasdk: $(cd /opt/aasdk && git rev-parse HEAD)" | sudo tee /data/build-info.txt
-echo "openauto: $(cd /opt/openauto && git rev-parse HEAD)" | sudo tee -a /data/build-info.txt
-echo "build-date: $(date -Is)" | sudo tee -a /data/build-info.txt
+sudo tee /data/openauto.ini << 'EOF'
+[General]
+ShowCursor=false
+HideWarning=true
+
+[Video]
+FPS=1
+Resolution=1
+ScreenDPI=140
+
+[AudioChannel]
+MediaEnabled=true
+GuidanceEnabled=true
+SystemEnabled=true
+TelephonyEnabled=true
+
+[Audio]
+OutputBackendType=1
+
+[Bluetooth]
+WirelessProjectionEnabled=true
+
+[Input]
+EnableTouchscreen=true
+EOF
 ```
 
-> **Note:** Wireless Android Auto requires a TCP transport in aasdk. The upstream aasdk only supports USB. See PiAuto-IG-001 §2 for the recommended approach: fork aasdk and add a `TCPTransport` alongside the existing `USBTransport`. The Python orchestrator handles BLE and WiFi; aasdk only needs to accept incoming TCP on port 5288.
+> Video Resolution=1 is 800x480 (the AA protocol maximum at 30 FPS). The display scales this to its native 1024x600.
+
+### 4.4 Record Build Info
+
+```bash
+echo "aasdk: $(cd /opt/aasdk && sudo git rev-parse HEAD)" | sudo tee /data/build-info.txt
+echo "openauto: $(cd /opt/openauto && sudo git rev-parse HEAD)" | sudo tee -a /data/build-info.txt
+echo "build-date: $(date -Is)" | sudo tee -a /data/build-info.txt
+```
 
 ---
 
@@ -386,7 +427,7 @@ power:
   shutdown_timeout_s: 10
 
 openauto:
-  binary: "/usr/local/bin/openauto"
+  binary: "/usr/local/bin/autoapp"
   extra_args: []
 EOF
 ```
@@ -463,7 +504,7 @@ Create `/data/eglfs.json`:
 ### 11.2 Verify EGLFS Works
 
 ```bash
-QT_QPA_PLATFORM=eglfs /usr/local/bin/openauto
+QT_QPA_PLATFORM=eglfs /usr/local/bin/autoapp
 # Should render to the display directly (no X11/Wayland)
 ```
 
@@ -482,7 +523,7 @@ Run these checks after setup to confirm everything is ready:
 | 5 | GPU memory | `vcgencmd get_mem gpu` | 128M |
 | 6 | Display resolution | `cat /sys/class/drm/card0-HDMI-A-2/modes \| head -1` | 1024x600 |
 | 7 | /data mounted | `mount \| grep /data` | ext4, rw |
-| 8 | OpenAuto binary | `ls -la /usr/local/bin/openauto` | exists |
+| 8 | OpenAuto binary | `ls -la /usr/local/bin/autoapp` | exists |
 | 9 | hostapd available | `which hostapd` | /usr/sbin/hostapd |
 | 10 | dnsmasq available | `which dnsmasq` | /usr/sbin/dnsmasq |
 | 11 | GPIO accessible | `gpioinfo 4` | shows lines |
@@ -537,4 +578,4 @@ journalctl -t piauto -f
 | Phone won't connect to WiFi | hostapd failed (bad channel/country) | Check `journalctl -u piauto` for hostapd errors. Verify `wifi.country` matches your region. |
 | No audio from speaker | A2DP not connected | `bluetoothctl connect XX:XX:XX:XX:XX:XX`. Check `wpctl status`. |
 | Boot timeout (60 s) | Service dependency not met | Check which service failed: `systemctl --failed`. |
-| OpenAuto crash | Missing libraries or DRM issue | Run `/usr/local/bin/openauto` manually and check stderr. |
+| OpenAuto crash | Missing libraries or DRM issue | Run `/usr/local/bin/autoapp` manually and check stderr. |

@@ -64,7 +64,7 @@ class PowerConfig:
 
 @dataclass
 class OpenAutoConfig:
-    binary: str = "/usr/local/bin/openauto"
+    binary: str = "/usr/local/bin/autoapp"
     extra_args: list[str] = field(default_factory=list)
 
 

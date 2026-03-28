@@ -27,6 +27,7 @@ PiAuto is a prototype automotive head unit that wirelessly mirrors an Android ph
 - Read-only root filesystem for reliability
 - Day/night mode support (phone-controlled)
 - OBD-II via Bluetooth (future/secondary)
+- On-screen setup UI for BT speaker pairing, WiFi config, and display settings (future/secondary)
 
 **Out of scope:**
 
@@ -205,6 +206,15 @@ Audio is routed from the Pi over Bluetooth A2DP to a vehicle speaker (or speaker
 | :----- | :----------------------------------------------------------------------------------------------------------- | :------- |
 | FR-046 | The system should support Bluetooth SPP or BLE connection to an ELM327-compatible OBD-II adapter.            | Could    |
 | FR-047 | OBD-II data (vehicle speed, RPM, coolant temperature) should be readable via standard PIDs.                  | Could    |
+
+### 3.15 On-Screen Setup UI (Future)
+
+| ID     | Requirement                                                                                                  | Priority |
+| :----- | :----------------------------------------------------------------------------------------------------------- | :------- |
+| FR-048 | The system should display an on-screen setup interface during IDLE state for initial device configuration.    | Could    |
+| FR-049 | The setup UI should allow Bluetooth audio speaker discovery, pairing, and selection via the touchscreen.      | Could    |
+| FR-050 | The setup UI should allow editing WiFi AP settings (SSID, password, channel, country code).                   | Could    |
+| FR-051 | The setup UI should display system status (CPU temp, BLE state, paired devices, IP address).                  | Could    |
 
 ---
 

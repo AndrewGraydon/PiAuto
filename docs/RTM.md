@@ -72,6 +72,10 @@ This document traces every requirement in PiAuto-SRS-001 forward to the architec
 | FR-045 | Writable /data partition       | Deployment (§7.2)      | —             | All states              | TC-025    |
 | FR-046 | OBD-II BT connection (future) | BlueZ (§4.2)           | —             | TBD                     | TBD       |
 | FR-047 | Read OBD-II PIDs (future)     | —                       | —             | TBD                     | TBD       |
+| FR-048 | On-screen setup UI (future)   | Splash/Qt EGLFS (§4.6) | —             | IDLE                    | TBD       |
+| FR-049 | BT speaker pairing UI (future)| BlueZ + Qt (§4.2, §4.6)| —             | IDLE                    | TBD       |
+| FR-050 | WiFi config UI (future)       | Qt EGLFS (§4.6)        | —             | IDLE                    | TBD       |
+| FR-051 | System status UI (future)     | Qt EGLFS (§4.6)        | —             | IDLE                    | TBD       |
 
 ---
 
@@ -128,9 +132,9 @@ This document traces every requirement in PiAuto-SRS-001 forward to the architec
 
 | Category           | Total Requirements | Traced to Architecture | Traced to Test | Coverage |
 | :----------------- | :----------------- | :--------------------- | :------------- | :------- |
-| Functional (FR)    | 47                 | 45 (FR-046/047 TBD)   | 45             | 96 %     |
+| Functional (FR)    | 51                 | 45 (6 future TBD)     | 45             | 88 %     |
 | Performance (PR)   | 5                  | 5                      | 5              | 100 %    |
 | Non-Functional (NR)| 7                  | 7                      | 7              | 100 %    |
-| **Total**          | **59**             | **57**                 | **57**         | **97 %** |
+| **Total**          | **63**             | **57**                 | **57**         | **90 %** |
 
-The 2 untraced requirements (FR-046, FR-047) are explicitly marked as future/secondary scope (OBD-II integration).
+The 6 untraced requirements are explicitly marked as future/secondary scope: OBD-II integration (FR-046, FR-047) and on-screen setup UI (FR-048–FR-051).
