@@ -131,10 +131,14 @@ class OpenAutoManager:
                 "QT_QPA_EGLFS_KMS_CONFIG", "/data/eglfs.json"
             ),
             "QT_QPA_EGLFS_HIDECURSOR": "1",
+            # Disable libinput — it opens the touchscreen as both pointer
+            # and touch device, causing double-tap behaviour.  We use the
+            # explicit evdevtouch plugin instead.
+            "QT_QPA_EGLFS_NO_LIBINPUT": "1",
             "QT_QPA_GENERIC_PLUGINS": "evdevtouch",
             "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS": os.environ.get(
                 "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS",
-                _detect_touchscreen_device(),
+                _detect_touchscreen_device() + ":grab",
             ),
             # PipeWire/PulseAudio runs as user pi (uid 1000) — autoapp
             # runs as root but needs access to the PipeWire PulseAudio socket
@@ -269,6 +273,27 @@ class OpenAutoManager:
         except TimeoutError:
             log.warning("OpenAuto did not become ready within %.0f s", timeout)
             return False
+
+    async def wait_for_projection_stopped(self) -> bool:
+        """Wait for OpenAuto to report projection stopped (phone disconnected).
+
+        Returns True if projection stopped, False if process exited first.
+        """
+        if not self._proc:
+            return False
+
+        stopped_task = asyncio.create_task(self._projection_stopped.wait())
+        exit_task = asyncio.create_task(self._proc.wait())
+
+        done, pending = await asyncio.wait(
+            [stopped_task, exit_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for task in pending:
+            task.cancel()
+
+        return stopped_task in done
 
     async def wait_for_exit(self) -> int | None:
         """Wait for OpenAuto to exit. Returns the exit code."""

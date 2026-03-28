@@ -458,12 +458,18 @@ class StateMachine:
         if self._volume:
             self._volume.start()
 
-        # Wait for OpenAuto to exit or ignition off
+        # Wait for OpenAuto to exit, projection stopped, or ignition off.
+        # The phone can disconnect without autoapp exiting — it stays running
+        # showing its own "waiting" screen. We detect this via stderr patterns
+        # and kill autoapp ourselves to return to our splash.
         exit_task = asyncio.create_task(self._openauto.wait_for_exit())
+        stopped_task = asyncio.create_task(
+            self._openauto.wait_for_projection_stopped()
+        )
         ignition_task = asyncio.create_task(self._ignition_off.wait())
 
         done, pending = await asyncio.wait(
-            [exit_task, ignition_task],
+            [exit_task, stopped_task, ignition_task],
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -478,10 +484,19 @@ class StateMachine:
             self._transition(State.SHUTDOWN, Event.IGNITION_OFF)
             return
 
+        if stopped_task in done:
+            # Phone disconnected but autoapp still running — kill it
+            # and return to splash
+            log.info("Phone disconnected (projection stopped) — returning to IDLE")
+            await self._openauto.kill()
+            await self._splash.launch("Waiting for phone...")
+            self._transition(State.IDLE, Event.PHONE_DISCONNECTED)
+            return
+
         exit_code = exit_task.result()
 
         if exit_code == 0:
-            # Clean phone disconnect
+            # Clean phone disconnect (autoapp exited on its own)
             log.info("Phone disconnected cleanly")
             await self._splash.launch("Waiting for phone...")
             self._transition(State.IDLE, Event.PHONE_DISCONNECTED)
