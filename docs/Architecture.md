@@ -132,16 +132,16 @@ graph TD
 
 | Component       | Technology          | Satisfies              | Description |
 | :-------------- | :------------------ | :--------------------- | :---------- |
-| BlueZ           | BlueZ 5.x (D-Bus)  | FR-001 to FR-005, FR-025, FR-026 | Handles BLE WAA service advertisement, credential exchange, Classic BT A2DP audio sink output, and paired device storage. |
+| BlueZ           | BlueZ 5.x (D-Bus)  | FR-001 to FR-005, FR-025, FR-026 | Handles BLE WAA advertisement (discovery), RFCOMM Profile1 (credential exchange), Classic BT A2DP audio sink, and paired device storage. |
 | hostapd         | hostapd 2.10+       | FR-006 to FR-009       | Configures and runs the 5 GHz 802.11ac AP. Started/stopped by the state machine on demand. |
-| dnsmasq         | dnsmasq             | FR-010                 | Lightweight DHCP server for the AP interface. Assigns 192.168.1.100–199. |
+| dnsmasq         | dnsmasq             | FR-010                 | Lightweight DHCP server for the AP interface. DHCP range is mode-dependent (see below). |
 
 **Key design decisions:**
 
-- **BLE for WAA discovery, Classic BT for audio.** The WAA protocol uses Bluetooth Low Energy for initial discovery and credential exchange (confirmed by the WirelessAndroidAutoDongle project and Google's HUIG). Classic Bluetooth (A2DP profile) is used separately for audio output to the vehicle speaker. These are independent Bluetooth functions running concurrently.
-- BlueZ is controlled via its D-Bus API (not direct HCI), which is the supported and stable interface. BlueZ 5.x supports both BLE and Classic profiles simultaneously.
-- hostapd is started only when needed (after BLE handshake) and stopped when projection ends, to conserve radio resources and reduce interference.
-- **WiFi AP+STA mode:** The Pi 4B's BCM43455 supports concurrent AP and station on the same radio (same channel). A virtual `uap0` interface hosts the AP while `wlan0` maintains infrastructure connectivity. This eliminates the need for a second WiFi adapter.
+- **BLE for discovery, RFCOMM for credentials, Classic BT for audio.** The WAA protocol uses BLE advertising for phone discovery only. The actual WiFi credential exchange happens over a Classic BT RFCOMM socket (BlueZ Profile1, channel 8). A2DP is used independently for audio output to the vehicle speaker. All three BT functions (BLE advert, RFCOMM profile, A2DP sink) run concurrently.
+- BlueZ is controlled via its D-Bus API (not direct HCI), which is the supported and stable interface. BlueZ 5.x supports BLE advertising, RFCOMM profiles, and Classic A2DP simultaneously.
+- hostapd is started only when needed (after RFCOMM credential exchange) and stopped when projection ends, to conserve radio resources and reduce interference.
+- **WiFi AP+STA mode:** The Pi 4B's BCM43455 supports concurrent AP and station on the same radio (same channel). A virtual `uap0` interface hosts the AP (192.168.50.1/24) while `wlan0` maintains infrastructure connectivity. In standalone mode, `wlan0` hosts the AP directly (192.168.1.1/24). Mode is auto-detected at runtime.
 - dnsmasq was chosen over isc-dhcp-server for minimal footprint.
 - **BR/EDR speaker pairing** uses `piauto.bt_pair` with dbus-next persistent D-Bus connections instead of `bluetoothctl`, which drops the connection too quickly for BR/EDR inquiry results to appear.
 
@@ -225,7 +225,8 @@ Phone AA App
   │                                        (System 16kHz mono)
   │                                        (Telephony 16kHz mono)
   │
-  └──[BLE]──► BlueZ (WAA discovery, credential exchange)
+  └──[BLE]──► BlueZ (WAA discovery advertisement)
+  └──[RFCOMM]──► BlueZ Profile1 (WAA credential exchange, channel 8)
   └──[BT Classic]──► BlueZ (A2DP audio sink registration)
 ```
 

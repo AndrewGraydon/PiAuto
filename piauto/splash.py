@@ -130,6 +130,7 @@ class SplashManager:
 
     def __init__(self) -> None:
         self._proc: asyncio.subprocess.Process | None = None
+        self._stdout_reading = False
 
     def _build_env(self) -> dict[str, str]:
         """Build environment for splash/UI subprocesses."""
@@ -148,8 +149,10 @@ class SplashManager:
         }
 
     async def _ensure_running(self) -> None:
-        """Ensure the splash process is running."""
+        """Ensure the splash process is running with a clean stdout stream."""
         if self.is_running:
+            # Reset the reader lock so a fresh caller can read stdout
+            self._stdout_reading = False
             return
 
         cmd = [sys.executable, "-m", "piauto.splash"]
@@ -166,23 +169,24 @@ class SplashManager:
         except (FileNotFoundError, PermissionError) as exc:
             log.warning("Failed to launch splash: %s", exc)
 
-    def _send_command(self, command: str) -> None:
-        """Send a command to the splash process via stdin."""
+    async def _send_command(self, command: str) -> None:
+        """Send a command to the splash process via stdin and flush."""
         if self._proc and self._proc.stdin and self._proc.returncode is None:
             try:
                 self._proc.stdin.write(f"{command}\n".encode())
-            except (BrokenPipeError, OSError):
+                await self._proc.stdin.drain()
+            except (BrokenPipeError, OSError, ConnectionResetError):
                 pass
 
     async def launch(self, status_text: str) -> None:
         """Show the idle splash screen with the given status text."""
         await self._ensure_running()
-        self._send_command(f"STATUS|{status_text}")
+        await self._send_command(f"STATUS|{status_text}")
 
     async def launch_bt_setup(self) -> None:
         """Switch to the Bluetooth speaker pairing UI."""
         await self._ensure_running()
-        self._send_command("BT_SETUP")
+        await self._send_command("BT_SETUP")
         log.info("Switched to BT setup view")
 
     async def read_stdout_line(self) -> str | None:
@@ -190,15 +194,22 @@ class SplashManager:
 
         Returns the line content, or None if not available / process exited.
         Used to receive signals like 'SETUP' or 'PAIRED|mac|name' from the UI.
+
+        Only one coroutine may read at a time; concurrent callers get None.
         """
         if not self._proc or not self._proc.stdout:
             return None
+        if self._stdout_reading:
+            return None
+        self._stdout_reading = True
         try:
             line = await self._proc.stdout.readline()
             if line:
                 return line.decode().strip()
         except (asyncio.CancelledError, OSError):
-            pass
+            raise
+        finally:
+            self._stdout_reading = False
         return None
 
     async def kill(self) -> None:
@@ -483,18 +494,35 @@ def _run_app() -> None:
     back_btn.clicked.connect(lambda: (print("BACK", flush=True), _show_idle()))
 
     # ── stdin command reader ──
-    stdin_notifier = QSocketNotifier(sys.stdin.fileno(), QSocketNotifier.Type.Read, win)
+    # Use raw fd reads to avoid Python buffered I/O conflicts with QSocketNotifier.
+    # Python's sys.stdin.readline() can consume all fd data into its internal buffer,
+    # causing QSocketNotifier to never fire again for remaining lines.
+    import fcntl
+    stdin_fd = sys.stdin.fileno()
+    fcntl.fcntl(stdin_fd, fcntl.F_SETFL,
+                fcntl.fcntl(stdin_fd, fcntl.F_GETFL) | os.O_NONBLOCK)
+    stdin_notifier = QSocketNotifier(stdin_fd, QSocketNotifier.Type.Read, win)
+    _stdin_buf = [""]  # mutable container for nonlocal access
 
     def _on_stdin():
-        line = sys.stdin.readline().strip()
-        if not line:
+        try:
+            data = os.read(stdin_fd, 4096)
+        except (OSError, BlockingIOError):
             return
-        if line.startswith("STATUS|"):
-            text = line[len("STATUS|"):]
-            idle_label.setText(text)
-            _show_idle()
-        elif line == "BT_SETUP":
-            _show_bt_setup()
+        if not data:
+            return
+        _stdin_buf[0] += data.decode("utf-8", errors="replace")
+        while "\n" in _stdin_buf[0]:
+            line, _stdin_buf[0] = _stdin_buf[0].split("\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("STATUS|"):
+                text = line[len("STATUS|"):]
+                idle_label.setText(text)
+                _show_idle()
+            elif line == "BT_SETUP":
+                _show_bt_setup()
 
     stdin_notifier.activated.connect(_on_stdin)
 

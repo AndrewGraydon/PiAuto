@@ -94,9 +94,9 @@ Audio is routed from the Pi over Bluetooth A2DP to a vehicle speaker (or speaker
 
 | ID     | Requirement                                                                                                  | Priority |
 | :----- | :----------------------------------------------------------------------------------------------------------- | :------- |
-| FR-001 | The system shall advertise the WAA service UUID `00004002-0000-1000-8000-00805f9b34fb` over Bluetooth Low Energy (BLE). | Must |
-| FR-002 | The system shall respond to incoming WAA BLE handshake requests and exchange Wi-Fi AP credentials with the phone via the WAA BLE protocol. | Must |
-| FR-003 | Upon successful BLE handshake, the system shall transmit a `WifiStartRequest` Protobuf message containing the AP SSID, password, static IP, and TCP port to the phone. | Must |
+| FR-001 | The system shall advertise the WAA service UUID `9b3f6c10-a4d2-418e-a2b9-0700300de8f4` over Bluetooth Low Energy (BLE) for phone discovery. | Must |
+| FR-002 | The system shall register a BlueZ RFCOMM Profile1 (UUID `4de17a00-52cb-11e6-bdf4-0800200c9a66`, channel 8) and accept incoming connections from phones for WAA credential exchange. | Must |
+| FR-003 | Upon RFCOMM connection, the system shall exchange Protobuf messages (WifiInfoResponse, WifiStartResponse) containing the AP SSID, BSSID, password, security mode, static IP, and TCP port. | Must |
 | FR-004 | The system shall store pairing records for up to 8 phones in persistent storage.                             | Must     |
 | FR-005 | On entering IDLE state, the system shall attempt to reconnect to the most recently connected phone before advertising to new devices. | Should |
 
@@ -104,11 +104,11 @@ Audio is routed from the Pi over Bluetooth A2DP to a vehicle speaker (or speaker
 
 | ID     | Requirement                                                                                                  | Priority |
 | :----- | :----------------------------------------------------------------------------------------------------------- | :------- |
-| FR-006 | The system shall start a 5 GHz 802.11ac (Wi-Fi 5) access point using hostapd upon BLE trigger.              | Must     |
+| FR-006 | The system shall start a 5 GHz 802.11ac (Wi-Fi 5) access point using hostapd upon successful credential exchange. | Must     |
 | FR-007 | The AP shall operate on channel 149 or 165 to avoid DFS/TPC regulatory restrictions.                        | Must     |
 | FR-008 | The AP shall use WPA2-AES encryption with a minimum 8-character PSK.                                        | Must     |
-| FR-009 | The AP shall assign the Pi a static IP address of 192.168.1.1 on the AP interface.                          | Must     |
-| FR-010 | The AP shall provide DHCP to connected clients, assigning addresses in the 192.168.1.100–199 range.         | Must     |
+| FR-009 | The AP shall assign the Pi a static IP on the AP interface: 192.168.50.1 (AP+STA mode) or 192.168.1.1 (standalone). | Must     |
+| FR-010 | The AP shall provide DHCP to connected clients with mode-appropriate address ranges.                        | Must     |
 
 ### 3.3 Connection & Projection Tunnel
 

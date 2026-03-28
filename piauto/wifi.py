@@ -2,6 +2,14 @@
 
 Satisfies: FR-006 to FR-010 (5 GHz AP, WPA2, DHCP).
 Templates per PiAuto-IG-001 §6–7.
+
+Supports two modes:
+- **AP+STA mode:** If ``uap0`` exists (created by udev rule), the AP runs on
+  ``uap0`` (192.168.50.1/24) while ``wlan0`` stays connected to infrastructure
+  WiFi. Both share one radio on the same channel.
+- **Standalone AP mode:** ``wlan0`` is used directly (192.168.1.1/24).
+
+The mode is auto-detected at construction time by checking for ``uap0``.
 """
 
 from __future__ import annotations
@@ -18,8 +26,19 @@ log = get_logger("wifi")
 
 HOSTAPD_CONF = Path("/tmp/hostapd.conf")
 DNSMASQ_CONF = Path("/tmp/dnsmasq.conf")
-AP_INTERFACE = "wlan0"
-AP_IP = "192.168.1.1"
+
+# Standalone AP mode (wlan0)
+_STANDALONE_INTERFACE = "wlan0"
+_STANDALONE_IP = "192.168.1.1"
+_STANDALONE_DHCP_START = "192.168.1.100"
+_STANDALONE_DHCP_END = "192.168.1.199"
+
+# AP+STA mode (uap0 virtual interface alongside wlan0 station)
+_AP_STA_INTERFACE = "uap0"
+_AP_STA_IP = "192.168.50.1"
+_AP_STA_DHCP_START = "192.168.50.100"
+_AP_STA_DHCP_END = "192.168.50.199"
+
 AP_NETMASK = "24"
 
 HOSTAPD_TEMPLATE = """\
@@ -42,7 +61,7 @@ max_num_sta=1
 
 DNSMASQ_TEMPLATE = """\
 interface={interface}
-dhcp-range=192.168.1.100,192.168.1.199,255.255.255.0,1h
+dhcp-range={dhcp_start},{dhcp_end},255.255.255.0,1h
 bind-interfaces
 no-resolv
 no-daemon
@@ -50,18 +69,54 @@ log-dhcp
 """
 
 
+def _detect_ap_sta_mode() -> bool:
+    """Return True if uap0 interface exists (AP+STA mode)."""
+    return Path("/sys/class/net/uap0").exists()
+
+
 class WifiManager:
-    """Manages the Wi-Fi AP lifecycle (hostapd + dnsmasq)."""
+    """Manages the Wi-Fi AP lifecycle (hostapd + dnsmasq).
+
+    Auto-detects AP+STA mode (uap0 present) vs standalone mode.
+    """
 
     def __init__(self, config: WifiConfig) -> None:
         self._config = config
         self._hostapd_proc: asyncio.subprocess.Process | None = None
         self._dnsmasq_proc: asyncio.subprocess.Process | None = None
+        self._nm_managed = False  # True if NetworkManager is managing the AP
+
+        # Detect AP mode
+        self._ap_sta = _detect_ap_sta_mode()
+        if self._ap_sta:
+            self._interface = _AP_STA_INTERFACE
+            self._ip = _AP_STA_IP
+            self._dhcp_start = _AP_STA_DHCP_START
+            self._dhcp_end = _AP_STA_DHCP_END
+            log.info("AP+STA mode detected (uap0 present) — AP on %s at %s",
+                     self._interface, self._ip)
+        else:
+            self._interface = _STANDALONE_INTERFACE
+            self._ip = _STANDALONE_IP
+            self._dhcp_start = _STANDALONE_DHCP_START
+            self._dhcp_end = _STANDALONE_DHCP_END
+            log.info("Standalone AP mode — AP on %s at %s",
+                     self._interface, self._ip)
+
+    @property
+    def ap_ip(self) -> str:
+        """IP address of the AP interface (used by BLE credential exchange)."""
+        return self._ip
+
+    @property
+    def ap_interface(self) -> str:
+        """Name of the AP network interface."""
+        return self._interface
 
     def _write_configs(self) -> None:
         """Generate hostapd and dnsmasq configuration files."""
         hostapd_conf = HOSTAPD_TEMPLATE.format(
-            interface=AP_INTERFACE,
+            interface=self._interface,
             ssid=self._config.ssid,
             channel=self._config.channel,
             password=self._config.password,
@@ -70,16 +125,20 @@ class WifiManager:
         HOSTAPD_CONF.write_text(hostapd_conf)
         log.debug("Wrote %s", HOSTAPD_CONF)
 
-        dnsmasq_conf = DNSMASQ_TEMPLATE.format(interface=AP_INTERFACE)
+        dnsmasq_conf = DNSMASQ_TEMPLATE.format(
+            interface=self._interface,
+            dhcp_start=self._dhcp_start,
+            dhcp_end=self._dhcp_end,
+        )
         DNSMASQ_CONF.write_text(dnsmasq_conf)
         log.debug("Wrote %s", DNSMASQ_CONF)
 
     async def _setup_interface(self) -> bool:
         """Configure the wireless interface with a static IP and regulatory domain."""
         cmds = [
-            ["ip", "link", "set", AP_INTERFACE, "up"],
-            ["ip", "addr", "flush", "dev", AP_INTERFACE],
-            ["ip", "addr", "add", f"{AP_IP}/{AP_NETMASK}", "dev", AP_INTERFACE],
+            ["ip", "link", "set", self._interface, "up"],
+            ["ip", "addr", "flush", "dev", self._interface],
+            ["ip", "addr", "add", f"{self._ip}/{AP_NETMASK}", "dev", self._interface],
             ["iw", "reg", "set", self._config.country],
         ]
         for cmd in cmds:
@@ -98,11 +157,27 @@ class WifiManager:
                 return False
         return True
 
-    async def start_ap(self) -> bool:
-        """Start hostapd and dnsmasq. Returns True on success.
+    def _check_nm_managed_ap(self) -> bool:
+        """Check if NetworkManager is already managing an AP on our interface."""
+        try:
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "dev", "status"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.strip().splitlines():
+                parts = line.split(":")
+                if len(parts) >= 3 and parts[0] == self._interface and parts[2] == "connected":
+                    return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return False
 
-        If PIAUTO_NO_AP is set, skip actual AP start to avoid killing
-        an existing WiFi client connection (e.g. SSH over wlan0).
+    async def start_ap(self) -> bool:
+        """Start the WiFi access point. Returns True on success.
+
+        If PIAUTO_NO_AP is set, skip entirely (dev mode).
+        If NetworkManager already manages an AP on our interface, use that.
+        Otherwise, start hostapd + dnsmasq manually.
         """
         if os.environ.get("PIAUTO_NO_AP"):
             log.warning(
@@ -111,10 +186,17 @@ class WifiManager:
             )
             return True
 
+        # Check if NetworkManager is already running the AP
+        if self._check_nm_managed_ap():
+            self._nm_managed = True
+            log.info("AP already managed by NetworkManager on %s — skipping hostapd/dnsmasq",
+                     self._interface)
+            return True
+
         self._write_configs()
 
         if not await self._setup_interface():
-            log.error("Failed to configure %s", AP_INTERFACE)
+            log.error("Failed to configure %s", self._interface)
             return False
 
         try:
@@ -154,9 +236,13 @@ class WifiManager:
     async def wait_for_client(self, timeout: float = 30.0) -> bool:
         """Wait for a DHCP lease assignment (phone joined AP).
 
-        Monitors dnsmasq stderr for DHCPACK messages. Returns True if
-        a client joined, False on timeout.
+        When NetworkManager manages the AP, polls the NM lease file.
+        Otherwise, monitors our dnsmasq stderr for DHCPACK messages.
+        Returns True if a client joined, False on timeout.
         """
+        if self._nm_managed:
+            return await self._wait_for_client_nm(timeout)
+
         if not self._dnsmasq_proc or not self._dnsmasq_proc.stderr:
             log.warning("dnsmasq not running — cannot wait for client")
             return False
@@ -176,6 +262,64 @@ class WifiManager:
             log.warning("WiFi timeout: no client joined within %.0f s", timeout)
             return False
 
+        return False
+
+    async def _wait_for_client_nm(self, timeout: float) -> bool:
+        """Wait for a NEW client by polling the NetworkManager dnsmasq lease file.
+
+        Tracks the file's modification time to detect new/renewed leases.
+        Also checks ARP table as a fallback to confirm the client is reachable.
+        """
+        lease_file = Path(f"/var/lib/NetworkManager/dnsmasq-{self._interface}.leases")
+        log.info("Waiting for client on %s (NM lease file: %s)", self._interface, lease_file)
+
+        # Record initial mtime so we detect any update (even same-IP renewals)
+        try:
+            initial_mtime = lease_file.stat().st_mtime if lease_file.exists() else 0.0
+        except OSError:
+            initial_mtime = 0.0
+
+        try:
+            async with asyncio.timeout(timeout):
+                while True:
+                    # Check if lease file was modified since we started waiting
+                    if lease_file.exists():
+                        try:
+                            current_mtime = lease_file.stat().st_mtime
+                        except OSError:
+                            current_mtime = 0.0
+
+                        if current_mtime > initial_mtime:
+                            content = lease_file.read_text().strip()
+                            if content:
+                                first_line = content.splitlines()[0]
+                                log.info("Phone joined AP (NM lease): %s", first_line)
+                                return True
+
+                    # Fallback: check ARP table for any REACHABLE client on the AP interface
+                    if await self._check_arp_client():
+                        log.info("Phone joined AP (ARP reachable on %s)", self._interface)
+                        return True
+
+                    await asyncio.sleep(1.0)
+        except TimeoutError:
+            log.warning("WiFi timeout: no client joined within %.0f s", timeout)
+            return False
+
+    async def _check_arp_client(self) -> bool:
+        """Check if any client is REACHABLE in the ARP table on the AP interface."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ip", "neigh", "show", "dev", self._interface,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await proc.communicate()
+            for line in stdout.decode().strip().splitlines():
+                if "REACHABLE" in line or "STALE" in line:
+                    return True
+        except (FileNotFoundError, OSError):
+            pass
         return False
 
     async def stop_ap(self) -> None:
@@ -200,7 +344,7 @@ class WifiManager:
         if was_running:
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    "ip", "addr", "flush", "dev", AP_INTERFACE,
+                    "ip", "addr", "flush", "dev", self._interface,
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
                 )

@@ -32,6 +32,7 @@ from piauto.log import get_logger, setup_logging
 from piauto.openauto import OpenAutoManager, ensure_tls_cert
 from piauto.splash import SplashManager, write_eglfs_config
 from piauto.thermal import ThermalMonitor
+from piauto.volume import VolumeSyncManager
 from piauto.wifi import WifiManager
 
 log = get_logger("statemachine")
@@ -68,7 +69,7 @@ class Event(enum.Enum):
 
 # Timeouts per SM-001 §6
 BOOT_TIMEOUT_S = 60
-BT_PAIRING_TIMEOUT_S = 15
+BT_PAIRING_TIMEOUT_S = 30  # includes AP startup + RFCOMM credential exchange
 WIFI_WAIT_TIMEOUT_S = 30
 TCP_CONNECT_TIMEOUT_S = 30
 ERROR_RECOVERY_WAIT_S = 5
@@ -88,6 +89,7 @@ class StateMachine:
         self._wifi: WifiManager | None = None
         self._openauto: OpenAutoManager | None = None
         self._splash: SplashManager | None = None
+        self._volume: VolumeSyncManager | None = None
         self._ignition_task: asyncio.Task | None = None
         self._ignition_off = asyncio.Event()
         self._retry_count = 0
@@ -184,15 +186,22 @@ class StateMachine:
                 self._splash = SplashManager()
                 await self._splash.launch("Starting...")
 
-                # Initialize BLE
-                self._ble = BleManager(self._config.bluetooth, self._config.wifi)
-                await self._ble.setup()
-
-                # Initialize WiFi manager (does not start AP yet)
+                # Initialize WiFi manager first (does not start AP yet)
+                # — BLE needs the AP IP for credential exchange
                 self._wifi = WifiManager(self._config.wifi)
+
+                # Initialize BLE with AP endpoint info
+                self._ble = BleManager(
+                    self._config.bluetooth, self._config.wifi,
+                    ap_ip=self._wifi.ap_ip, ap_interface=self._wifi.ap_interface,
+                )
+                await self._ble.setup()
 
                 # Initialize OpenAuto manager
                 self._openauto = OpenAutoManager(self._config.openauto)
+
+                # Initialize AVRCP volume sync
+                self._volume = VolumeSyncManager()
 
         except TimeoutError:
             log.error("Boot timeout — services not ready within %d s", BOOT_TIMEOUT_S)
@@ -255,10 +264,24 @@ class StateMachine:
             return
 
         if setup_task in done:
+            # Wait for other tasks to actually cancel before reading from
+            # splash stdout in _handle_bt_setup (avoids concurrent readers)
+            for task in pending:
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                    pass
             log.info("Setup requested — launching BT speaker pairing UI")
             await self._ble.stop_advertising()
             await self._handle_bt_setup()
             return
+
+        # Wait for cancelled tasks to release resources (especially splash stdout)
+        for task in pending:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                pass
 
         phone = phone_task.result()
         if phone:
@@ -295,46 +318,73 @@ class StateMachine:
     # ── BT_PAIRING ───────────────────────────────────────────
 
     async def _handle_bt_pairing(self) -> None:
-        """BT_PAIRING: Exchange WiFi credentials. SM-001 §3.3."""
+        """BT_PAIRING: Exchange WiFi credentials. SM-001 §3.3.
+
+        Critical timing: autoapp takes ~6s to bind port 5000. The phone
+        tries to TCP-connect immediately after receiving credentials.
+        So we must: start AP → launch autoapp → wait for port ready →
+        THEN send credentials via RFCOMM.
+        """
         log.info("=== BT_PAIRING ===")
 
         await self._splash.launch("Pairing...")
 
         try:
             async with asyncio.timeout(BT_PAIRING_TIMEOUT_S):
-                # Check ignition during pairing
                 if self._ignition_off.is_set():
                     self._transition(State.SHUTDOWN, Event.IGNITION_OFF)
                     return
 
+                # 1. Start WiFi AP
+                if not await self._wifi.start_ap():
+                    log.error("Failed to start AP during BT_PAIRING")
+                    self._transition(State.IDLE, Event.BT_HANDSHAKE_FAILED)
+                    return
+
+                # 2. Kill splash and launch autoapp so it's listening on
+                #    port 5000 BEFORE the phone gets the IP:port
+                await self._splash.kill_and_wait_drm_release()
+                if not await self._openauto.launch():
+                    log.error("Failed to launch OpenAuto during BT_PAIRING")
+                    self._transition(State.IDLE, Event.BT_HANDSHAKE_FAILED)
+                    return
+
+                # 3. Wait for autoapp to bind port 5000 (polls every 0.5s)
+                if not await self._openauto.wait_for_listening(timeout=15.0):
+                    log.error("OpenAuto did not start listening in time")
+                    await self._openauto.kill()
+                    self._transition(State.IDLE, Event.BT_HANDSHAKE_FAILED)
+                    return
+
+                # 4. NOW send credentials — phone will TCP-connect to
+                #    the already-listening autoapp
                 success = await self._ble.send_credentials(self._current_phone)
 
                 if success:
-                    # Save pairing record
                     self._ble.save_pairing(self._current_phone, time.time())
                     await self._ble.stop_advertising()
                     self._transition(State.WIFI_WAIT, Event.CREDENTIALS_SENT)
                 else:
                     log.warning("BLE handshake failed")
+                    await self._openauto.kill()
                     self._transition(State.IDLE, Event.BT_HANDSHAKE_FAILED)
 
         except TimeoutError:
             log.warning("BT pairing timeout (%d s)", BT_PAIRING_TIMEOUT_S)
+            if self._openauto and self._openauto.is_running:
+                await self._openauto.kill()
             self._transition(State.IDLE, Event.BT_HANDSHAKE_FAILED)
 
     # ── WIFI_WAIT ────────────────────────────────────────────
 
     async def _handle_wifi_wait(self) -> None:
-        """WIFI_WAIT: Start AP, wait for phone to join. SM-001 §3.4."""
+        """WIFI_WAIT: Wait for phone to join AP. SM-001 §3.4.
+
+        AP and autoapp are already started in BT_PAIRING. autoapp is
+        listening on port 5000. We just need to wait for the phone to
+        join WiFi, then transition to TCP_CONNECT.
+        """
         log.info("=== WIFI_WAIT ===")
-
-        await self._splash.launch("Connecting to Wi-Fi...")
-
-        # Start the access point
-        if not await self._wifi.start_ap():
-            log.error("Failed to start AP")
-            self._transition(State.IDLE, Event.WIFI_TIMEOUT)
-            return
 
         # Wait for phone to join AP or ignition off
         client_task = asyncio.create_task(
@@ -355,16 +405,11 @@ class StateMachine:
             return
 
         if client_task.result():
-            # Phone joined AP — kill splash, launch OpenAuto
-            await self._splash.kill_and_wait_drm_release()
-
-            if await self._openauto.launch():
-                self._transition(State.TCP_CONNECT, Event.PHONE_JOINED_AP)
-            else:
-                log.error("Failed to launch OpenAuto")
-                self._transition(State.IDLE, Event.WIFI_TIMEOUT)
+            # Phone is on AP — autoapp already running and listening
+            self._transition(State.TCP_CONNECT, Event.PHONE_JOINED_AP)
         else:
             # Timeout — no client joined
+            await self._openauto.kill()
             await self._wifi.stop_ap()
             self._transition(State.IDLE, Event.WIFI_TIMEOUT)
 
@@ -409,6 +454,10 @@ class StateMachine:
         """PROJECTION_ACTIVE: Monitor OpenAuto process. SM-001 §3.6."""
         log.info("=== PROJECTION_ACTIVE ===")
 
+        # Start AVRCP volume sync (phone volume → PipeWire)
+        if self._volume:
+            self._volume.start()
+
         # Wait for OpenAuto to exit or ignition off
         exit_task = asyncio.create_task(self._openauto.wait_for_exit())
         ignition_task = asyncio.create_task(self._ignition_off.wait())
@@ -420,6 +469,10 @@ class StateMachine:
 
         for task in pending:
             task.cancel()
+
+        # Stop volume sync when leaving PROJECTION_ACTIVE
+        if self._volume:
+            self._volume.stop()
 
         if ignition_task in done:
             self._transition(State.SHUTDOWN, Event.IGNITION_OFF)

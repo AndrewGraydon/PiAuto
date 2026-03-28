@@ -31,6 +31,8 @@ TLS_CERT = TLS_CERT_DIR / "cert.pem"
 PROJECTION_ACTIVE_PATTERNS = [
     "[VideoMediaSinkService] start()",
     "[VideoService] start",
+    "Projection started",
+    "MediaSink started",
 ]
 
 # Pattern indicating OpenAuto has quit or the phone disconnected.
@@ -81,6 +83,21 @@ async def ensure_tls_cert() -> bool:
         return False
 
 
+async def _kill_stale_autoapp() -> None:
+    """Kill any stale autoapp/openauto processes that might hold port 5000."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "pkill", "-9", "-f", "autoapp",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+        # Brief delay for port release
+        await asyncio.sleep(0.5)
+    except FileNotFoundError:
+        pass
+
+
 class OpenAutoManager:
     """Manages the OpenAuto C++ process lifecycle."""
 
@@ -93,6 +110,13 @@ class OpenAutoManager:
 
     async def launch(self) -> bool:
         """Launch OpenAuto as a subprocess. Returns True if started successfully."""
+        # Kill any previous instance that might still hold the TCP port
+        if self._proc and self._proc.returncode is None:
+            await self.kill()
+
+        # Also kill any stale autoapp processes from outside our management
+        await _kill_stale_autoapp()
+
         binary = self._config.binary
 
         if not Path(binary).exists():
@@ -112,6 +136,10 @@ class OpenAutoManager:
                 "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS",
                 _detect_touchscreen_device(),
             ),
+            # PipeWire/PulseAudio runs as user pi (uid 1000) — autoapp
+            # runs as root but needs access to the PipeWire PulseAudio socket
+            "XDG_RUNTIME_DIR": "/run/user/1000",
+            "PULSE_SERVER": "unix:/run/user/1000/pulse/native",
         }
 
         try:
@@ -128,12 +156,31 @@ class OpenAutoManager:
             log.error("Failed to launch OpenAuto: %s", exc)
             return False
 
-        # Start background task to parse output for projection status
+        # Start background tasks to parse output for projection status
         self._projection_active.clear()
         self._projection_stopped.clear()
         self._monitor_task = asyncio.create_task(self._monitor_output())
+        self._stdout_task = asyncio.create_task(self._monitor_stdout())
 
         return True
+
+    async def _monitor_stdout(self) -> None:
+        """Read OpenAuto's stdout for additional log output."""
+        if not self._proc or not self._proc.stdout:
+            return
+
+        while True:
+            line = await self._proc.stdout.readline()
+            if not line:
+                break
+            text = line.decode(errors="replace").strip()
+            if text:
+                log.debug("OpenAuto(stdout): %s", text)
+                for pattern in PROJECTION_ACTIVE_PATTERNS:
+                    if pattern in text:
+                        log.info("Projection active detected (stdout): %s", text)
+                        self._projection_active.set()
+                        break
 
     async def _monitor_output(self) -> None:
         """Read OpenAuto's stderr line by line, looking for projection status.
@@ -163,6 +210,31 @@ class OpenAutoManager:
                     log.info("Projection stopped detected: %s", text)
                     self._projection_stopped.set()
                     break
+
+    async def wait_for_listening(self, timeout: float = 15.0) -> bool:
+        """Wait for autoapp to start listening on its TCP port (5000).
+
+        Polls `ss` every 0.5s. Returns True once port is bound, False on timeout.
+        """
+        try:
+            async with asyncio.timeout(timeout):
+                while True:
+                    if self._proc and self._proc.returncode is not None:
+                        log.warning("OpenAuto exited before binding port")
+                        return False
+                    proc = await asyncio.create_subprocess_exec(
+                        "ss", "-tlnH",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    stdout, _ = await proc.communicate()
+                    if b":5000 " in stdout or b":5000\t" in stdout:
+                        log.info("OpenAuto is listening on port 5000")
+                        return True
+                    await asyncio.sleep(0.5)
+        except TimeoutError:
+            log.warning("OpenAuto did not bind port 5000 within %.0f s", timeout)
+            return False
 
     async def wait_for_ready(self, timeout: float = 30.0) -> bool:
         """Wait for OpenAuto to report projection is active.
@@ -204,15 +276,7 @@ class OpenAutoManager:
             return None
 
         code = await self._proc.wait()
-
-        if self._monitor_task:
-            self._monitor_task.cancel()
-            try:
-                await self._monitor_task
-            except asyncio.CancelledError:
-                pass
-            self._monitor_task = None
-
+        await self._cancel_monitors()
         log.info("OpenAuto exited with code %s", code)
         return code
 
@@ -231,13 +295,19 @@ class OpenAutoManager:
             self._proc.kill()
             await self._proc.wait()
 
-        if self._monitor_task:
-            self._monitor_task.cancel()
-            try:
-                await self._monitor_task
-            except asyncio.CancelledError:
-                pass
-            self._monitor_task = None
+        await self._cancel_monitors()
+
+    async def _cancel_monitors(self) -> None:
+        """Cancel output monitoring tasks."""
+        for task in (self._monitor_task, getattr(self, "_stdout_task", None)):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._monitor_task = None
+        self._stdout_task = None
 
     @property
     def is_running(self) -> bool:

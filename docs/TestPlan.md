@@ -52,28 +52,28 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-001                                                  |
 | Method       | T                                                       |
 | Precondition | PiAuto booted, in IDLE state                            |
-| Procedure    | 1. On Android phone, use a BLE scanner app (e.g., nRF Connect). 2. Scan for BLE devices. 3. Verify PiAuto appears with WAA service UUID `00004002-...`. 4. On Pi, verify via `bluetoothctl` that the BLE GATT service is registered. |
-| Pass Criteria| WAA service UUID visible in BLE scan. Pi is advertising in BLE mode. |
+| Procedure    | 1. On Android phone, use a BLE scanner app (e.g., nRF Connect). 2. Scan for BLE devices. 3. Verify PiAuto appears with WAA service UUID `9b3f6c10-a4d2-418e-a2b9-0700300de8f4`. 4. On Pi, verify via `journalctl -u piauto` that BLE advertisement is registered. |
+| Pass Criteria| WAA service UUID visible in BLE scan. Pi is advertising in BLE mode and RFCOMM profile is registered. |
 
-### TC-002: BLE Pairing & Handshake
+### TC-002: BLE Discovery & RFCOMM Pairing
 
 | Field        | Value                                                   |
 | :----------- | :------------------------------------------------------ |
 | Traces to    | FR-002, NR-005                                          |
 | Method       | D                                                       |
 | Precondition | PiAuto in IDLE, phone not previously paired              |
-| Procedure    | 1. On phone, enable Wireless Android Auto in Settings. 2. Phone discovers PiAuto. 3. Accept pairing prompt. 4. Observe Pi transitions from IDLE → BT_PAIRING. 5. Verify via `journalctl` that BLE handshake completed. |
-| Pass Criteria| Pairing succeeds using standard Android UI. State machine enters BT_PAIRING. No custom app required on phone. |
+| Procedure    | 1. On phone, enable Wireless Android Auto in Settings. 2. Phone discovers PiAuto via BLE. 3. Phone pairs over Classic BT (auto-accepted). 4. Phone connects to RFCOMM profile. 5. Observe Pi transitions from IDLE → BT_PAIRING. 6. Verify via `journalctl` that RFCOMM NewConnection was received. |
+| Pass Criteria| Pairing succeeds. RFCOMM connection received. State machine enters BT_PAIRING. |
 
-### TC-003: WifiStartRequest Delivery
+### TC-003: RFCOMM Credential Exchange
 
 | Field        | Value                                                   |
 | :----------- | :------------------------------------------------------ |
 | Traces to    | FR-003                                                  |
 | Method       | T                                                       |
-| Precondition | Phone paired, system in BT_PAIRING state                |
-| Procedure    | 1. Monitor piauto-main logs for WifiStartRequest output. 2. Verify message contains correct SSID, password, IP (192.168.1.1), and port (5288). |
-| Pass Criteria| Protobuf message sent via BLE GATT. Phone ACKs. State transitions to WIFI_WAIT. |
+| Precondition | Phone paired, system in BT_PAIRING state, RFCOMM connected |
+| Procedure    | 1. Monitor piauto logs for RFCOMM message exchange. 2. Verify WifiInfoResponse contains correct SSID, BSSID, password. 3. Verify WifiStartResponse contains correct IP and port (5288). |
+| Pass Criteria| Protobuf messages exchanged via RFCOMM. State transitions to WIFI_WAIT. |
 
 ### TC-004: Pairing Record Persistence
 
@@ -455,7 +455,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-002 (timeout path), SM §3.3                          |
 | Method       | T                                                       |
 | Precondition | System in IDLE, phone initiates BLE connection           |
-| Procedure    | 1. Start BLE handshake but block/delay phone response (e.g., airplane mode mid-pairing). 2. Wait 15 seconds. 3. Verify state machine transitions to IDLE (not ERROR_RECOVERY). 4. Verify BLE advertising resumes. |
+| Procedure    | 1. Start RFCOMM credential exchange but block/delay phone response (e.g., airplane mode mid-pairing). 2. Wait 15 seconds. 3. Verify state machine transitions to IDLE (not ERROR_RECOVERY). 4. Verify BLE advertising resumes. |
 | Pass Criteria| BT_PAIRING times out after 15 s. Returns to IDLE. No ERROR_RECOVERY entered. |
 
 ### TC-037: TCP_CONNECT Timeout

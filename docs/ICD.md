@@ -56,27 +56,40 @@ This ICD covers:
 
 ---
 
-## 3. IF-01: BLE WAA Discovery & Handshake
+## 3. IF-01: BLE WAA Discovery & RFCOMM Credential Exchange
 
 ### 3.1 Overview
 
-The initial connection between the Android phone and PiAuto is established over Bluetooth Low Energy (BLE). The Pi advertises a WAA service; the phone discovers it, pairs, and receives Wi-Fi AP credentials via a Protobuf message exchange over the BLE GATT characteristic.
+The WAA connection uses **two Bluetooth transports**:
 
-**Important:** WAA discovery uses BLE, not Classic Bluetooth. This is confirmed by the Google HUIG, the WirelessAndroidAutoDongle project, and the aa-proxy-rs source code. Classic Bluetooth (HFP, A2DP) is used separately and independently for telephony audio and stereo audio output.
+1. **BLE (Bluetooth Low Energy)** — Used **only** for discovery. The Pi advertises a BLE service with the WAA UUID so the phone can find it.
+2. **Classic BT RFCOMM** — Used for the actual credential exchange. After the phone discovers the Pi via BLE, it pairs over Classic BT and connects to an RFCOMM profile to exchange WiFi AP credentials via protobuf messages.
 
-### 3.2 BLE Configuration
+This two-transport architecture is confirmed by the WirelessAndroidAutoDongle project, aa-proxy-rs, and the Google HUIG. The credential exchange does **not** use BLE GATT characteristics.
+
+### 3.2 BLE Configuration (Discovery Only)
 
 | Parameter            | Value                                          |
 | :------------------- | :--------------------------------------------- |
 | Bluetooth Type       | BLE (Bluetooth Low Energy)                     |
-| Service UUID         | `00004002-0000-1000-8000-00805f9b34fb`         |
-| Service Name         | "Wireless Android Auto"                        |
-| Pairing Mode         | BLE pairing (LE Secure Connections preferred)   |
+| Service UUID         | `9b3f6c10-a4d2-418e-a2b9-0700300de8f4`        |
+| Advertisement Type   | Peripheral                                     |
+| Local Name           | Configurable (default: "PiAuto")               |
 | Max Paired Devices   | 8 (stored persistently in `/data/bt/`)         |
 | Advertising Mode     | Connectable, discoverable                      |
-| Advertising Interval | 100 ms (fast) during active scan, 1000 ms (slow) during idle |
 
-### 3.3 BT Classic Configuration (Audio — Independent)
+### 3.3 RFCOMM Configuration (Credential Exchange)
+
+| Parameter            | Value                                          |
+| :------------------- | :--------------------------------------------- |
+| Bluetooth Type       | Classic (BR/EDR)                               |
+| Service UUID         | `4de17a00-52cb-11e6-bdf4-0800200c9a66`        |
+| Channel              | 8                                              |
+| Registration         | BlueZ Profile1 (creates SDP record)            |
+| Pairing Agent        | NoInputNoOutput (auto-accept)                  |
+| Message Framing      | 4-byte header + protobuf payload (see §3.6)    |
+
+### 3.4 BT Classic Configuration (Audio — Independent)
 
 | Parameter            | Value                                          |
 | :------------------- | :--------------------------------------------- |
@@ -85,48 +98,87 @@ The initial connection between the Android phone and PiAuto is established over 
 | Profiles (Optional)  | HFP AG (hands-free gateway for phone calls — out of scope for v1) |
 | Discoverable         | Yes (for initial speaker pairing)              |
 
-### 3.4 BLE Handshake Sequence
+### 3.5 Connection Sequence
 
 ```mermaid
 sequenceDiagram
     participant Phone
-    participant BlueZ as BlueZ (BLE)
+    participant BLE as BlueZ (BLE)
+    participant RFCOMM as BlueZ (RFCOMM)
     participant SM as State Machine
 
-    Note over BlueZ: Advertising WAA UUID
-    Phone->>BlueZ: BLE Scan → Discover WAA Service
-    BlueZ->>SM: Event: PhoneDetected(mac_addr)
+    Note over BLE: Advertising WAA BLE UUID<br/>9b3f6c10-a4d2-...
+
+    Phone->>BLE: BLE Scan → Discover WAA Service
+    Phone->>RFCOMM: Classic BT Pair (auto-accepted)
+    RFCOMM->>RFCOMM: Store pairing record in /data/bt/
+
+    Phone->>RFCOMM: Connect to RFCOMM profile (UUID 4de17a00-...)
+    RFCOMM->>SM: Profile1.NewConnection(device, fd)
     SM->>SM: Transition IDLE → BT_PAIRING
 
-    Phone->>BlueZ: BLE Connect + Pair
-    BlueZ->>BlueZ: Store pairing record in /data/bt/
+    Phone->>RFCOMM: WifiStartRequest (msg type 1)
+    Phone->>RFCOMM: WifiInfoRequest (msg type 2, optional)
+    RFCOMM->>Phone: WifiInfoResponse (msg type 3)
+    Note right of Phone: Contains SSID, BSSID,<br/>password, security mode
+    RFCOMM->>Phone: WifiStartResponse (msg type 4)
+    Note right of Phone: Contains IP address,<br/>port (5288)
 
-    Phone->>BlueZ: Read GATT characteristic (WAA handshake)
-    BlueZ->>Phone: WifiStartRequest (Protobuf via GATT)
-    Note right of Phone: Contains SSID, password,<br/>IP, port
+    Phone->>RFCOMM: WifiConnectStatus (msg type 7, optional)
+    Phone->>RFCOMM: Disconnect RFCOMM
 
-    Phone->>BlueZ: WifiStartResponse (ACK)
-    BlueZ->>SM: Event: CredentialsSent
     SM->>SM: Transition BT_PAIRING → WIFI_WAIT
+    Note over Phone: Phone joins WiFi AP using<br/>received credentials
 ```
 
-### 3.5 WifiStartRequest Message
+### 3.6 RFCOMM Message Framing
 
-Serialized as Protocol Buffers, transmitted via BLE GATT write.
+All messages use a 4-byte header followed by a protobuf-encoded payload:
 
-| Field        | Protobuf Type | Value                    | Description                     |
-| :----------- | :------------ | :----------------------- | :------------------------------ |
-| `ssid`       | string        | From config (e.g., "PiAuto") | AP network name             |
-| `password`   | string        | From config (min 8 chars)| WPA2-PSK passphrase             |
-| `ip_address` | string        | "192.168.1.1"            | Pi's static IP on the AP        |
-| `port`       | uint32        | 5288                     | TCP port for AA tunnel          |
+```
+┌──────────────────┬──────────────────┬─────────────────────────┐
+│ Payload Length    │ Message Type     │ Protobuf Payload        │
+│ uint16 big-endian│ uint16 big-endian│ variable length         │
+│ (2 bytes)        │ (2 bytes)        │ (Length bytes)          │
+└──────────────────┴──────────────────┴─────────────────────────┘
+```
 
-### 3.6 Auto-Reconnect Behavior
+### 3.7 RFCOMM Message Types
+
+| Type | Name               | Direction    | Description                                |
+| :--- | :----------------- | :----------- | :----------------------------------------- |
+| 1    | WifiStartRequest   | Phone → HU   | Phone initiates WiFi setup                 |
+| 2    | WifiInfoRequest    | Phone → HU   | Phone requests WiFi credentials (optional) |
+| 3    | WifiInfoResponse   | HU → Phone   | HU sends AP credentials                    |
+| 4    | WifiStartResponse  | HU → Phone   | HU sends AA TCP endpoint info              |
+| 7    | WifiConnectStatus  | Phone → HU   | Phone reports WiFi connection result        |
+
+### 3.8 WifiInfoResponse Message (Type 3)
+
+Serialized as Protocol Buffers, transmitted via RFCOMM.
+
+| Field           | Proto Field | Protobuf Type | Value                       | Description                 |
+| :-------------- | :---------- | :------------ | :-------------------------- | :-------------------------- |
+| `ssid`          | 1           | string        | From config (e.g., "PiAuto")| AP network name             |
+| `bssid`         | 2           | bytes         | AP interface MAC (6 bytes)  | AP radio MAC address        |
+| `key`           | 3           | string        | From config (min 8 chars)   | WPA2-PSK passphrase         |
+| `security_mode` | 4           | uint32        | 2                           | WPA2-PSK                    |
+| `ap_type`       | 5           | uint32        | 1                           | Dynamic AP                  |
+
+### 3.9 WifiStartResponse Message (Type 4)
+
+| Field           | Proto Field | Protobuf Type | Value                       | Description                 |
+| :-------------- | :---------- | :------------ | :-------------------------- | :-------------------------- |
+| `status`        | 1           | uint32        | 0                           | OK                          |
+| `ip_address`    | 2           | string        | AP IP (e.g., "192.168.50.1")| Pi's static IP on the AP    |
+| `port`          | 3           | uint32        | 5288                        | TCP port for AA tunnel      |
+
+### 3.10 Auto-Reconnect Behavior
 
 On entering IDLE, the system checks the paired device list (ordered by last-connected timestamp). For the most recent device:
 
 1. Send directed BLE advertisements targeting the known device.
-2. If the device responds within 10 seconds, initiate connection and send `WifiStartRequest` without requiring re-pairing.
+2. If the device responds within 10 seconds, the phone connects to the RFCOMM profile directly (already paired) and credential exchange proceeds without re-pairing.
 3. If not found within 10 seconds, fall back to general undirected BLE advertising.
 
 ---
@@ -135,7 +187,7 @@ On entering IDLE, the system checks the paired device list (ordered by last-conn
 
 ### 4.1 Overview
 
-After BLE credential exchange, the Pi starts a 5 GHz access point. The phone uses the received credentials to join the AP.
+After RFCOMM credential exchange, the Pi starts a 5 GHz access point. The phone uses the received credentials to join the AP.
 
 ### 4.2 AP Configuration
 
@@ -178,7 +230,7 @@ In standalone (production) mode without infrastructure WiFi, `wlan0` runs the AP
 
 The AP is **not** running at all times. It is started and stopped by the state machine:
 
-- **Start:** On transition to WIFI_WAIT (after BLE credentials sent).
+- **Start:** On transition to WIFI_WAIT (after RFCOMM credentials sent).
 - **Stop:** On transition to IDLE (after disconnection or shutdown).
 - **Timeout:** If no phone joins within 30 seconds, event `WifiTimeout` is raised → transition to ERROR_RECOVERY.
 
@@ -528,7 +580,7 @@ The Python state machine (`piauto-main`) communicates with system services and m
 
 | Target         | Mechanism                  | Operations                         |
 | :------------- | :------------------------- | :--------------------------------- |
-| BlueZ          | D-Bus (system bus)         | Register BLE GATT service, advertise WAA UUID, pair, manage paired devices, monitor A2DP sink |
+| BlueZ          | D-Bus (system bus)         | Register BLE advertisement (WAA UUID), RFCOMM Profile1 (credential exchange), pair, manage paired devices, monitor A2DP sink |
 | hostapd        | systemd D-Bus + config file| Start/stop service, write hostapd.conf dynamically |
 | dnsmasq        | systemd D-Bus + config file| Start/stop alongside hostapd       |
 | OpenAuto       | Process management (fork/exec) | Launch with command-line args (resolution, audio config). Monitor process. Parse stderr for status events. Detect exit code for clean vs error shutdown. |

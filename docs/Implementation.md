@@ -33,7 +33,7 @@ The upstream OpenAuto (`bluewave-studio/openauto`) was originally designed for *
 
 | Option | Description | Effort |
 | :----- | :---------- | :----- |
-| **A. Fork aasdk with TCP transport** | Modify `aasdk/transport` to add a `TCPTransport` alongside the existing `USBTransport`. The BLE handshake and WiFi AP are managed by the Python orchestrator; aasdk only needs to accept an incoming TCP connection on port 5288 instead of opening a USB endpoint. | Medium |
+| **A. Fork aasdk with TCP transport** | Modify `aasdk/transport` to add a `TCPTransport` alongside the existing `USBTransport`. The BLE/RFCOMM credential exchange and WiFi AP are managed by the Python orchestrator; aasdk only needs to accept an incoming TCP connection on port 5288 instead of opening a USB endpoint. | Medium |
 | **B. Use Crankshaft as reference** | Crankshaft achieved wireless AA on earlier versions. Study their patches to aasdk/OpenAuto for TCP transport support. | Medium |
 | **C. Build a TCP-to-USB bridge** | Run aasdk in USB mode but use a virtual USB gadget (via Linux configfs) to pipe TCP data into a fake USB endpoint. This is effectively what WirelessAndroidAutoDongle does. | High complexity, fragile |
 
@@ -57,9 +57,9 @@ piauto/
 ├── __init__.py
 ├── __main__.py              # Entry point: python -m piauto
 ├── statemachine.py          # State machine (SM-001 implementation)
-├── ble.py                   # BLE WAA advertising and handshake (BlueZ D-Bus)
+├── ble.py                   # BLE WAA advertising + RFCOMM credential exchange (BlueZ D-Bus)
 ├── bt_pair.py               # BR/EDR discovery and pairing via dbus-next
-├── wifi.py                  # hostapd + dnsmasq management
+├── wifi.py                  # hostapd + dnsmasq management (auto-detects AP+STA vs standalone)
 ├── gpio.py                  # Ignition sense (GPIO 17) + fan PWM (GPIO 4)
 ├── thermal.py               # Temperature monitoring + fan profile
 ├── config.py                # YAML config loader + validator
@@ -178,10 +178,10 @@ WantedBy=multi-user.target
 
 File generated dynamically at `/tmp/hostapd.conf` by `piauto.wifi` module:
 
-> **Note:** In AP+STA mode, the AP runs on `uap0` (virtual interface) while `wlan0` remains connected to infrastructure WiFi. In standalone AP mode (production), `wlan0` is used directly.
+> **Note:** The `{interface}` placeholder is auto-detected at runtime. In AP+STA mode (`uap0` exists), the AP runs on `uap0` while `wlan0` remains connected to infrastructure WiFi. In standalone AP mode, `wlan0` is used directly.
 
 ```ini
-interface=wlan0
+interface={interface}
 driver=nl80211
 ssid={ssid}
 hw_mode=a
@@ -198,7 +198,13 @@ country_code={country}
 max_num_sta=1
 ```
 
-Placeholders `{ssid}`, `{channel}`, `{password}`, `{country}` are filled from the YAML config.
+| Placeholder   | Source                                                                   |
+| :------------ | :----------------------------------------------------------------------- |
+| `{interface}` | Auto-detected: `uap0` (AP+STA) or `wlan0` (standalone)                  |
+| `{ssid}`      | `wifi.ssid` from YAML config                                            |
+| `{channel}`   | `wifi.channel` from YAML config                                         |
+| `{password}`  | `wifi.password` from YAML config                                        |
+| `{country}`   | `wifi.country` from YAML config                                         |
 
 ---
 
@@ -207,12 +213,18 @@ Placeholders `{ssid}`, `{channel}`, `{password}`, `{country}` are filled from th
 File generated at `/tmp/dnsmasq.conf`:
 
 ```ini
-interface=wlan0
-dhcp-range=192.168.1.100,192.168.1.199,255.255.255.0,1h
+interface={interface}
+dhcp-range={dhcp_start},{dhcp_end},255.255.255.0,1h
 bind-interfaces
 no-resolv
 no-daemon
+log-dhcp
 ```
+
+| Mode       | Interface | AP IP          | DHCP Range                          |
+| :--------- | :-------- | :------------- | :---------------------------------- |
+| AP+STA     | `uap0`    | 192.168.50.1   | 192.168.50.100 – 192.168.50.199    |
+| Standalone | `wlan0`   | 192.168.1.1    | 192.168.1.100 – 192.168.1.199      |
 
 ---
 

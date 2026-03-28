@@ -104,7 +104,7 @@ stateDiagram-v2
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | Accept BLE pairing. Exchange Wi-Fi credentials via GATT (`WifiStartRequest`). Update splash ("Pairing..."). |
+| Entry Actions  | Accept Classic BT pairing. Exchange Wi-Fi credentials via RFCOMM (WifiInfoResponse + WifiStartResponse). Update splash ("Pairing..."). |
 | Exit Actions   | Store/update pairing record in `/data/bt/`                    |
 | Timeout        | 15 seconds                                                    |
 | Satisfies      | FR-002, FR-003, FR-004, FR-037                                |
@@ -200,9 +200,9 @@ stateDiagram-v2
 | ServicesStarted      | Boot sequence          | All critical services (BlueZ, PipeWire) are running and healthy |
 | BootFailed           | Boot sequence          | A critical service failed to start               |
 | BootTimeout          | Timer (60 s)           | Boot did not complete within 60 seconds          |
-| PhoneDetected        | BlueZ D-Bus (BLE)     | A phone has connected to the WAA BLE service UUID |
-| CredentialsSent      | BlueZ D-Bus (BLE GATT)| `WifiStartRequest` sent and ACKed by phone       |
-| BtHandshakeFailed    | BlueZ D-Bus / Timer   | BLE pairing or credential exchange timed out or was rejected |
+| PhoneDetected        | BlueZ RFCOMM Profile1 | A phone has connected to the WAA RFCOMM profile   |
+| CredentialsSent      | RFCOMM socket          | WiFi credentials exchanged via RFCOMM protobuf messages |
+| BtHandshakeFailed    | RFCOMM / Timer         | Pairing or RFCOMM credential exchange timed out or failed |
 | PhoneJoinedAP        | dnsmasq / hostapd      | A DHCP lease was assigned on the AP interface     |
 | WifiTimeout          | Timer                  | Phone did not join AP within 30 seconds          |
 | OpenAutoReady        | OpenAuto (log parse)   | OpenAuto reports projection is active            |

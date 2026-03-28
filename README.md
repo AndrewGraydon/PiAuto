@@ -13,8 +13,8 @@ Phone ──TCP/TLS──► OpenAuto (AA projection on port 5288)
 Pi ──BT A2DP──► Vehicle Speaker (audio output)
 ```
 
-1. Pi advertises a Wireless Android Auto BLE service
-2. Phone discovers it, pairs, and receives Wi-Fi credentials
+1. Pi advertises a Wireless Android Auto BLE service for discovery
+2. Phone pairs over Classic BT and receives Wi-Fi credentials via RFCOMM
 3. Phone joins the Pi's 5 GHz access point
 4. OpenAuto handles the AA session (video, audio, touch)
 5. Audio routes over Bluetooth A2DP to your vehicle speaker
@@ -74,7 +74,7 @@ The Python state machine orchestrates the connection lifecycle (BLE discovery, W
 piauto/
 ├── __main__.py       # Entry point: python -m piauto
 ├── statemachine.py   # Central orchestrator (8 states)
-├── ble.py            # BLE WAA advertising and handshake
+├── ble.py            # BLE WAA advertising + RFCOMM credential exchange
 ├── bt_pair.py        # BR/EDR speaker discovery and pairing (dbus-next)
 ├── wifi.py           # hostapd + dnsmasq AP management
 ├── gpio.py           # Ignition sense + fan PWM (libgpiod)
@@ -187,7 +187,7 @@ This is a prototype/hobbyist project. The specification suite is complete and th
 
 **In progress:**
 - **aasdk TCP transport** — upstream aasdk supports wired USB only; a fork adding TCP transport is needed for wireless AA (see [Implementation Guide](docs/Implementation.md) §2)
-- **BLE GATT server** — the `ble.py` module has the D-Bus framework but the full GATT service registration and WAA handshake flow needs completion against real hardware
+- **WAA credential exchange** — `ble.py` implements BLE advertising + RFCOMM Profile1 for credential exchange; needs testing against a real phone to verify protobuf field mappings
 - **End-to-end AA projection** — requires aasdk TCP transport to test full phone-to-display flow
 
 ## License
