@@ -114,7 +114,7 @@ Audio is routed from the Pi over Bluetooth A2DP to a vehicle speaker (or speaker
 
 | ID     | Requirement                                                                                                  | Priority |
 | :----- | :----------------------------------------------------------------------------------------------------------- | :------- |
-| FR-011 | The system shall listen on TCP port 5288 for incoming AA projection connections.                             | Must     |
+| FR-011 | The system shall listen on TCP port 5000 for incoming AA projection connections.                             | Must     |
 | FR-012 | The system shall complete a TLS 1.2+ handshake before accepting projection data.                             | Must     |
 | FR-013 | The system shall perform AA version negotiation (MESSAGE_VERSION_REQUEST / MESSAGE_VERSION_RESPONSE) on the Control channel before starting services. | Must |
 | FR-014 | The system shall perform AA service discovery, announcing supported services (Media Sink, Input Source, Sensor Source) and negotiating active channels with the phone. | Must |

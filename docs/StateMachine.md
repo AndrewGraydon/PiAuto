@@ -104,16 +104,18 @@ stateDiagram-v2
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | Accept Classic BT pairing. Exchange Wi-Fi credentials via RFCOMM (WifiInfoResponse + WifiStartResponse). Update splash ("Pairing..."). |
+| Entry Actions  | Accept Classic BT pairing. Start hostapd + dnsmasq (AP). Kill splash screen app. Launch OpenAuto process (takes over display). Wait for OpenAuto TCP port 5000 ready. Exchange Wi-Fi credentials via RFCOMM (WifiInfoResponse + WifiStartResponse). |
 | Exit Actions   | Store/update pairing record in `/data/bt/`                    |
 | Timeout        | 15 seconds                                                    |
 | Satisfies      | FR-002, FR-003, FR-004, FR-037                                |
 
 | Event              | Guard               | Target State      | Actions                        |
 | :----------------- | :------------------- | :---------------- | :----------------------------- |
-| CredentialsSent    | Phone ACKed          | WIFI_WAIT         | Start hostapd + dnsmasq       |
+| CredentialsSent    | Phone ACKed          | WIFI_WAIT         | —                              |
 | BtHandshakeFailed | Timeout or NAK       | IDLE              | Log failure. Return to advertising. |
 | IgnitionOff        | —                    | SHUTDOWN          | —                              |
+
+**Note:** OpenAuto is launched **during** BT_PAIRING, before credentials are sent. The sequence is: Start AP -> Kill splash -> Launch OpenAuto -> Wait for port 5000 ready -> Send RFCOMM credentials. This ensures OpenAuto is already listening when the phone receives the TCP endpoint and attempts to connect.
 
 **Note:** BT failures go to IDLE (not ERROR_RECOVERY) because the phone never reached the AP — there is nothing to retry at the TCP level.
 
@@ -121,14 +123,14 @@ stateDiagram-v2
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | Start hostapd (5 GHz AP) and dnsmasq. Start timeout timer (30 s). Update splash ("Waiting for Wi-Fi..."). |
+| Entry Actions  | Start timeout timer (30 s). AP and OpenAuto are already running (started during BT_PAIRING). |
 | Exit Actions   | Cancel timeout timer                                          |
 | Timeout        | 30 seconds                                                    |
 | Satisfies      | FR-006 to FR-010, FR-037                                      |
 
 | Event            | Guard               | Target State    | Actions                          |
 | :--------------- | :------------------- | :-------------- | :------------------------------- |
-| PhoneJoinedAP    | DHCP lease assigned  | TCP_CONNECT     | Kill splash screen app. Launch OpenAuto process (takes over display). |
+| PhoneJoinedAP    | DHCP lease assigned  | TCP_CONNECT     | — (OpenAuto already running) |
 | WifiTimeout      | 30 s elapsed         | IDLE            | Stop hostapd + dnsmasq. Log timeout. |
 | IgnitionOff      | —                    | SHUTDOWN        | —                                |
 
@@ -138,7 +140,7 @@ stateDiagram-v2
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | OpenAuto process is now running. It listens on TCP 5288, performs TLS handshake, AA version negotiation, and service discovery internally. |
+| Entry Actions  | OpenAuto is already running (launched during BT_PAIRING). It listens on TCP 5000, performs TLS handshake, AA version negotiation, and service discovery internally. |
 | Exit Actions   | None                                                          |
 | Timeout        | 30 seconds (covers TCP + TLS + version negotiation + service discovery) |
 | Satisfies      | FR-011 to FR-014, FR-037                                      |
@@ -149,14 +151,14 @@ stateDiagram-v2
 | OpenAutoFailed   | OpenAuto exits with error or timeout | ERROR_RECOVERY | Log error             |
 | IgnitionOff      | —                     | SHUTDOWN            | —                            |
 
-**Note:** The state machine does not directly interact with TCP/TLS/version negotiation. It monitors OpenAuto's stderr/stdout for a "projection active" log message (or equivalent). If OpenAuto exits before reaching this state, it is treated as a failure.
+**Note:** OpenAuto was already launched during BT_PAIRING and is listening on port 5000 when this state is entered. The state machine does not directly interact with TCP/TLS/version negotiation. It monitors OpenAuto's stderr/stdout for a "projection active" log message (or equivalent). If OpenAuto exits before reaching this state, it is treated as a failure.
 
 ### 3.6 PROJECTION_ACTIVE
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | OpenAuto is streaming video to display and audio to PipeWire. Touch input forwarding is active. |
-| Exit Actions   | None                                                          |
+| Entry Actions  | OpenAuto is streaming video to display and audio to PipeWire. Touch input forwarding is active. Start AVRCP volume sync (poll BlueZ MediaTransport1.Volume, map to PipeWire default sink via wpctl). |
+| Exit Actions   | Stop AVRCP volume sync                                        |
 | Satisfies      | FR-016 to FR-031, FR-038, FR-039, PR-002, PR-003, PR-004     |
 
 | Event              | Guard                    | Target State      | Actions                      |

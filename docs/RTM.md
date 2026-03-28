@@ -35,7 +35,7 @@ This document traces every requirement in PiAuto-SRS-001 forward to the architec
 | FR-008 | WPA2-AES with min 8-char PSK  | hostapd (§4.2)         | IF-02 (§4.2)  | WIFI_WAIT               | TC-006    |
 | FR-009 | Pi static IP 192.168.1.1      | hostapd (§4.2)         | IF-02 (§4.3)  | WIFI_WAIT               | TC-006    |
 | FR-010 | DHCP 192.168.1.100–199        | dnsmasq (§4.2)         | IF-02 (§4.3)  | WIFI_WAIT               | TC-007    |
-| FR-011 | Listen on TCP port 5288       | OpenAuto (§4.3)        | IF-03 (§5)    | TCP_CONNECT             | TC-008    |
+| FR-011 | Listen on TCP port 5000       | OpenAuto (§4.3)        | IF-03 (§5)    | TCP_CONNECT             | TC-008    |
 | FR-012 | TLS 1.2+ handshake            | OpenAuto (§4.3)        | IF-03 (§5.2)  | TCP_CONNECT             | TC-009    |
 | FR-013 | AA version negotiation         | OpenAuto (§4.3)        | IF-03 (§5.6)  | TCP_CONNECT             | TC-009    |
 | FR-014 | AA service discovery           | OpenAuto (§4.3)        | IF-04 (§6)    | TCP_CONNECT             | TC-009    |

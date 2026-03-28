@@ -72,7 +72,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-003                                                  |
 | Method       | T                                                       |
 | Precondition | Phone paired, system in BT_PAIRING state, RFCOMM connected |
-| Procedure    | 1. Monitor piauto logs for RFCOMM message exchange. 2. Verify WifiInfoResponse contains correct SSID, BSSID, password. 3. Verify WifiStartResponse contains correct IP and port (5288). |
+| Procedure    | 1. Monitor piauto logs for RFCOMM message exchange. 2. Verify WifiInfoResponse contains correct SSID, BSSID, password. 3. Verify WifiStartResponse contains correct IP and port (5000). |
 | Pass Criteria| Protobuf messages exchanged via RFCOMM. State transitions to WIFI_WAIT. |
 
 ### TC-004: Pairing Record Persistence
@@ -123,15 +123,15 @@ This document defines the verification approach for every requirement in PiAuto-
 
 ## 4. Test Cases — Connection & Projection Tunnel
 
-### TC-008: TCP Listen on Port 5288
+### TC-008: TCP Listen on Port 5000
 
 | Field        | Value                                                   |
 | :----------- | :------------------------------------------------------ |
 | Traces to    | FR-011                                                  |
 | Method       | T                                                       |
 | Precondition | OpenAuto started, system in TCP_CONNECT                 |
-| Procedure    | 1. On Pi, run `ss -tlnp | grep 5288`. 2. Verify OpenAuto is listening. |
-| Pass Criteria| TCP socket bound to 192.168.1.1:5288 in LISTEN state.  |
+| Procedure    | 1. On Pi, run `ss -tlnp | grep 5000`. 2. Verify OpenAuto is listening. |
+| Pass Criteria| TCP socket bound to 192.168.1.1:5000 in LISTEN state.  |
 
 ### TC-009: TLS, Version Negotiation & Service Discovery
 
@@ -465,7 +465,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-011 (timeout path), SM §3.5                          |
 | Method       | T                                                       |
 | Precondition | Phone on AP, OpenAuto launched                          |
-| Procedure    | 1. Prevent phone from completing TCP connection (e.g., firewall port 5288 on phone). 2. Wait 30 seconds. 3. Verify state machine transitions to ERROR_RECOVERY. 4. Verify retry logic triggers (up to 3 retries). |
+| Procedure    | 1. Prevent phone from completing TCP connection (e.g., firewall port 5000 on phone). 2. Wait 30 seconds. 3. Verify state machine transitions to ERROR_RECOVERY. 4. Verify retry logic triggers (up to 3 retries). |
 | Pass Criteria| TCP_CONNECT times out after 30 s. Enters ERROR_RECOVERY. Retries up to 3 times, then returns to IDLE. |
 
 ### TC-038: Boot Timeout
@@ -505,7 +505,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-005 | Auto-Reconnect                 | D      | Pending |      |       |
 | TC-006 | AP Configuration               | T      | Pending |      |       |
 | TC-007 | DHCP Lease Assignment          | T      | Pending |      |       |
-| TC-008 | TCP Listen Port 5288           | T      | Pending |      |       |
+| TC-008 | TCP Listen Port 5000           | T      | Pending |      |       |
 | TC-009 | TLS + Version + Service Discovery | T   | Pending |      |       |
 | TC-010 | Reconnection on Loss           | T      | Pending |      |       |
 | TC-011 | H.264 Decode & Display         | D      | Pending |      |       |

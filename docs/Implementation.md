@@ -33,7 +33,7 @@ The upstream OpenAuto (`bluewave-studio/openauto`) was originally designed for *
 
 | Option | Description | Effort |
 | :----- | :---------- | :----- |
-| **A. Fork aasdk with TCP transport** | Modify `aasdk/transport` to add a `TCPTransport` alongside the existing `USBTransport`. The BLE/RFCOMM credential exchange and WiFi AP are managed by the Python orchestrator; aasdk only needs to accept an incoming TCP connection on port 5288 instead of opening a USB endpoint. | Medium |
+| **A. Fork aasdk with TCP transport** | Modify `aasdk/transport` to add a `TCPTransport` alongside the existing `USBTransport`. The BLE/RFCOMM credential exchange and WiFi AP are managed by the Python orchestrator; aasdk only needs to accept an incoming TCP connection on port 5000 instead of opening a USB endpoint. | Medium |
 | **B. Use Crankshaft as reference** | Crankshaft achieved wireless AA on earlier versions. Study their patches to aasdk/OpenAuto for TCP transport support. | Medium |
 | **C. Build a TCP-to-USB bridge** | Run aasdk in USB mode but use a virtual USB gadget (via Linux configfs) to pipe TCP data into a fake USB endpoint. This is effectively what WirelessAndroidAutoDongle does. | High complexity, fragile |
 
@@ -65,6 +65,7 @@ piauto/
 ├── config.py                # YAML config loader + validator
 ├── openauto.py              # OpenAuto process launcher + monitor
 ├── splash.py                # Splash screen app + BT speaker setup UI
+├── volume.py                # AVRCP→PipeWire volume sync
 ├── clock.py                 # System time initialization (FR-042)
 └── logging.py               # journald logging setup
 ```
@@ -328,6 +329,8 @@ proc = subprocess.Popen(
         **os.environ,
         "QT_QPA_PLATFORM": "eglfs",
         "QT_QPA_EGLFS_KMS_CONFIG": "/data/eglfs.json",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "PULSE_SERVER": "unix:/run/user/1000/pulse/native",
     },
     user="piauto",
 )
@@ -390,3 +393,104 @@ wifi:
 This is passed to hostapd as `country_code=AU` and to the kernel via `iw reg set AU`.
 
 **Note for the developer:** Channel 149 and 165 are available in most regions (US, AU, EU, JP) but not all. If the chosen channel is unavailable, hostapd will fail to start — the state machine should catch this and log a clear error.
+
+---
+
+## 13. Volume Sync Module
+
+Module: `piauto/volume.py`
+
+The volume sync module bridges AVRCP volume reports from the phone to PipeWire on the Pi.
+
+| Parameter | Value |
+| :-------- | :---- |
+| BlueZ property | `org.bluez.MediaTransport1.Volume` |
+| Poll interval | 0.3 s |
+| Input range | 0–127 (AVRCP) |
+| Output range | 0.0–1.0 (PipeWire linear) |
+| Sink command | `wpctl set-volume @DEFAULT_AUDIO_SINK@ <value>` |
+
+The state machine starts the volume polling task on entry to `PROJECTION_ACTIVE` and cancels it on exit. The module runs as an `asyncio.Task` that reads the D-Bus property, maps the value linearly (`volume / 127`), and calls `wpctl` only when the value changes.
+
+---
+
+## 14. BT_PAIRING Timing and Port Readiness
+
+The BT_PAIRING → PROJECTION_ACTIVE transition has a strict ordering requirement. The phone attempts a TCP connection to port 5000 **immediately** after receiving RFCOMM credentials, so the port must already be listening.
+
+**Sequence:**
+
+1. State machine starts the WiFi AP (hostapd + dnsmasq).
+2. State machine launches OpenAuto (`autoapp`).
+3. State machine polls `ss -tlnH sport = :5000` until the port is listening. OpenAuto typically takes ~6 s to bind port 5000.
+4. **Only after port 5000 is confirmed listening**, the state machine sends WiFi credentials over the RFCOMM channel.
+5. Phone connects to the AP, then opens a TCP connection to port 5000.
+
+If port 5000 does not become ready within the TCP_CONNECT timeout (30 s), the state machine fires `OpenAutoFailed` and transitions to ERROR_RECOVERY.
+
+---
+
+## 15. PipeWire Environment for OpenAuto
+
+OpenAuto (`autoapp`) runs as root but must use the PipeWire/PulseAudio daemon running as user `pi` (uid 1000). The following environment variables must be set in the OpenAuto subprocess:
+
+```python
+env={
+    **os.environ,
+    "QT_QPA_PLATFORM": "eglfs",
+    "QT_QPA_EGLFS_KMS_CONFIG": "/data/eglfs.json",
+    "XDG_RUNTIME_DIR": "/run/user/1000",
+    "PULSE_SERVER": "unix:/run/user/1000/pulse/native",
+}
+```
+
+| Variable | Purpose |
+| :------- | :------ |
+| `XDG_RUNTIME_DIR` | Points to user `pi`'s runtime dir so PipeWire clients find the correct socket |
+| `PULSE_SERVER` | Directs PulseAudio-compatible clients (Qt multimedia) to the PipeWire-Pulse socket owned by uid 1000 |
+
+**Prerequisite:** `loginctl enable-linger pi` must be enabled so that PipeWire and WirePlumber start at boot for user `pi` regardless of login state.
+
+---
+
+## 16. GStreamer Packages
+
+OpenAuto uses Qt Multimedia, which delegates to GStreamer for media decoding. The following packages are required on Debian Trixie:
+
+| Package | Purpose |
+| :------ | :------ |
+| `libqt5multimedia5-plugins` | Qt Multimedia → GStreamer bridge (provides the GStreamer QMediaService plugin) |
+| `gstreamer1.0-libav` | H.264 video decoder (libav/ffmpeg-based) used for the AA video stream |
+| `gstreamer1.0-plugins-bad` | Additional decoders and parsers (e.g., `h264parse`) |
+| `gstreamer1.0-plugins-ugly` | Patent-encumbered codecs that may be needed for certain audio streams |
+
+Install:
+
+```bash
+apt install libqt5multimedia5-plugins gstreamer1.0-libav \
+    gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+```
+
+---
+
+## 17. D-Bus Policy for WirePlumber Bluetooth
+
+WirePlumber (running as user `pi`, uid 1000) must communicate with `bluetoothd` (running as root) over the system D-Bus to manage A2DP sink/source endpoints. Without an explicit policy file, D-Bus denies these calls.
+
+File: `/etc/dbus-1/system.d/wireplumber-bluetooth.conf`
+
+```xml
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <policy user="pi">
+    <allow send_destination="org.bluez"/>
+  </policy>
+</busconfig>
+```
+
+This grants user `pi` permission to send method calls and property reads to the BlueZ D-Bus service. After installing this file, reload the D-Bus daemon:
+
+```bash
+systemctl reload dbus
+```

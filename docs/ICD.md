@@ -122,7 +122,7 @@ sequenceDiagram
     RFCOMM->>Phone: WifiInfoResponse (msg type 3)
     Note right of Phone: Contains SSID, BSSID,<br/>password, security mode
     RFCOMM->>Phone: WifiStartResponse (msg type 4)
-    Note right of Phone: Contains IP address,<br/>port (5288)
+    Note right of Phone: Contains IP address,<br/>port (5000)
 
     Phone->>RFCOMM: WifiConnectStatus (msg type 7, optional)
     Phone->>RFCOMM: Disconnect RFCOMM
@@ -171,7 +171,7 @@ Serialized as Protocol Buffers, transmitted via RFCOMM.
 | :-------------- | :---------- | :------------ | :-------------------------- | :-------------------------- |
 | `status`        | 1           | uint32        | 0                           | OK                          |
 | `ip_address`    | 2           | string        | AP IP (e.g., "192.168.50.1")| Pi's static IP on the AP    |
-| `port`          | 3           | uint32        | 5288                        | TCP port for AA tunnel      |
+| `port`          | 3           | uint32        | 5000                        | TCP port for AA tunnel      |
 
 ### 3.10 Auto-Reconnect Behavior
 
@@ -240,7 +240,7 @@ The AP is **not** running at all times. It is started and stopped by the state m
 
 ### 5.1 Overview
 
-Once the phone joins the AP, it connects to the Pi on TCP port 5288. A TLS handshake secures the connection, followed by AA version negotiation and service discovery. OpenAuto handles this entire flow.
+Once the phone joins the AP, it connects to the Pi on TCP port 5000. A TLS handshake secures the connection, followed by AA version negotiation and service discovery. OpenAuto handles this entire flow.
 
 ### 5.2 Connection Parameters
 
@@ -248,7 +248,7 @@ Once the phone joins the AP, it connects to the Pi on TCP port 5288. A TLS hands
 | :--------------- | :--------------------------------------- |
 | Transport        | TCP                                      |
 | Bind Address     | 192.168.1.1                              |
-| Port             | 5288                                     |
+| Port             | 5000                                     |
 | TLS Version      | 1.2 minimum, 1.3 preferred              |
 | Certificate      | Self-signed, generated at first boot, stored in `/data/tls/` |
 | Backlog          | 1 (single client)                        |
@@ -261,7 +261,7 @@ sequenceDiagram
     participant OA as OpenAuto
     participant SM as State Machine
 
-    Phone->>OA: TCP SYN (port 5288)
+    Phone->>OA: TCP SYN (port 5000)
     OA->>Phone: TCP SYN-ACK
     Phone->>OA: TCP ACK
     OA->>SM: Log: TCP connected
@@ -465,6 +465,18 @@ On boot, WirePlumber's BlueZ policy module attempts to connect to the last known
 2. If the speaker is found, WirePlumber sets it as the default audio sink.
 3. If not found within 30 seconds, PipeWire routes audio to a null sink (silent) until the speaker is available.
 
+### 8.6 AVRCP Volume Sync
+
+During PROJECTION_ACTIVE, the orchestrator polls the BlueZ `org.bluez.MediaTransport1.Volume` property via D-Bus to track the phone's AVRCP volume level. This value (0–127) is mapped to the PipeWire default sink volume via `wpctl set-volume`. Polling interval: 1 second. This keeps the Pi's output volume in sync with the phone's volume rocker.
+
+### 8.7 Audio Path
+
+OpenAuto outputs audio via RtAudio, which connects to PipeWire through the `pipewire-pulse` compatibility layer. PipeWire then routes audio to the BT A2DP sink managed by WirePlumber.
+
+```
+OpenAuto (RtAudio) → pipewire-pulse → PipeWire → WirePlumber → BlueZ A2DP → BT Speaker
+```
+
 ---
 
 ## 9. IF-07: Touch Input
@@ -600,7 +612,7 @@ openauto \
   --fps=30 \
   --audio-output=pipewire \
   --listen-address=192.168.1.1 \
-  --listen-port=5288 \
+  --listen-port=5000 \
   --tls-cert=/data/tls/cert.pem \
   --tls-key=/data/tls/key.pem
 ```

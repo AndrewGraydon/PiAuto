@@ -141,7 +141,7 @@ graph TD
 - **BLE for discovery, RFCOMM for credentials, Classic BT for audio.** The WAA protocol uses BLE advertising for phone discovery only. The actual WiFi credential exchange happens over a Classic BT RFCOMM socket (BlueZ Profile1, channel 8). A2DP is used independently for audio output to the vehicle speaker. All three BT functions (BLE advert, RFCOMM profile, A2DP sink) run concurrently.
 - BlueZ is controlled via its D-Bus API (not direct HCI), which is the supported and stable interface. BlueZ 5.x supports BLE advertising, RFCOMM profiles, and Classic A2DP simultaneously.
 - hostapd is started only when needed (after RFCOMM credential exchange) and stopped when projection ends, to conserve radio resources and reduce interference.
-- **WiFi AP+STA mode:** The Pi 4B's BCM43455 supports concurrent AP and station on the same radio (same channel). A virtual `uap0` interface hosts the AP (192.168.50.1/24) while `wlan0` maintains infrastructure connectivity. In standalone mode, `wlan0` hosts the AP directly (192.168.1.1/24). Mode is auto-detected at runtime.
+- **WiFi AP+STA mode:** The Pi 4B's BCM43455 supports concurrent AP and station on the same radio (same channel). A virtual `uap0` interface hosts the AP (192.168.50.1/24) while `wlan0` maintains infrastructure connectivity. In standalone mode, `wlan0` hosts the AP directly (192.168.1.1/24). Mode is auto-detected at runtime by checking for `/sys/class/net/uap0`; if present, hostapd binds to `uap0`, otherwise it binds to `wlan0`.
 - dnsmasq was chosen over isc-dhcp-server for minimal footprint.
 - **BR/EDR speaker pairing** uses `piauto.bt_pair` with dbus-next persistent D-Bus connections instead of `bluetoothctl`, which drops the connection too quickly for BR/EDR inquiry results to appear.
 
@@ -155,7 +155,7 @@ graph TD
 
 **What OpenAuto handles internally (the Python orchestrator does NOT):**
 
-- TCP listen on port 5288
+- TCP listen on port 5000
 - TLS 1.2+ handshake
 - AA version negotiation (MESSAGE_VERSION_REQUEST / RESPONSE)
 - Service discovery (announcing Media Sink, Input Source, Sensor Source services)
@@ -184,11 +184,14 @@ graph TD
 | Qt 5 EGLFS      | Qt 5.15, EGLFS plugin | FR-017, FR-036, FR-037 | Direct KMS/DRM rendering without X11 or Wayland. Qt's EGLFS plugin renders OpenAuto's UI directly to the HDMI framebuffer. Also used by the splash screen — a single long-lived Qt process with `QStackedWidget` that switches views (idle, BT setup) via stdin commands without releasing DRM master. |
 | V4L2 Decoder    | Linux V4L2 API      | FR-016, PR-003         | Hardware H.264 Baseline Profile decoding on the Pi 4's VideoCore VI. OpenAuto feeds NAL units to V4L2 and receives decoded frames for rendering. |
 | PipeWire        | PipeWire 0.3+       | FR-020 to FR-026, PR-004 | Receives AA audio streams from OpenAuto, mixes them per AA audio focus rules, and routes the output to the BlueZ A2DP sink. |
+| Volume Sync     | Python (piauto/volume.py) | FR-025              | Polls BT AVRCP volume via BlueZ D-Bus (`org.bluez.MediaTransport1.Volume`) and syncs to PipeWire default sink via `wpctl set-volume`. Keeps physical speaker volume in sync with phone-side volume changes. |
 
 **Key design decisions:**
 
 - **Qt EGLFS over X11/Wayland:** Qt's EGLFS platform plugin renders directly to KMS/DRM without a compositor. This provides the compositorless rendering goal while remaining compatible with OpenAuto (which is a Qt application). Launched with `QT_QPA_PLATFORM=eglfs`. No X server needed.
 - **PipeWire over ALSA:** PipeWire natively handles concurrent stream mixing, Bluetooth audio routing (via WirePlumber + BlueZ integration), and dynamic sink switching. ALSA alone cannot mix streams or route to Bluetooth. PipeWire also supports the 16 kHz mono streams used by Guidance/System/Telephony without requiring manual resampling.
+- **Audio path:** OpenAuto (RtAudio backend) → PipeWire (pipewire-pulse compatibility layer) → BT A2DP speaker. OpenAuto runs as root but requires `XDG_RUNTIME_DIR=/run/user/1000` and `PULSE_SERVER=unix:/run/user/1000/pulse/native` environment variables to reach the `pi` user's PipeWire instance.
+- **Optional USB BT dongle (hci1):** The Pi 4B's BCM43455 shares a single radio for WiFi and BT, causing contention when WiFi AP and BT A2DP audio are active simultaneously. A USB BT adapter (e.g. CSR8510-based) on `hci1` can be dedicated to speaker audio, leaving the onboard `hci0` for BLE/RFCOMM discovery only. This eliminates audio dropouts caused by WiFi/BT radio contention.
 - **V4L2 hardware decode** is the standard approach for H.264 on Pi 4. OpenAuto/aasdk supports V4L2 M2M as a decode backend. Zero-copy paths (dmabuf) from decode to display are possible via DRM PRIME.
 
 ### 4.5 Layer 5: Hardware Abstraction
@@ -215,7 +218,7 @@ graph TD
 ```
 Phone AA App
   │
-  ├──[WiFi 5GHz]──► hostapd ──► OpenAuto (TCP:5288, TLS, AAP)
+  ├──[WiFi 5GHz]──► hostapd ──► OpenAuto (TCP:5000, TLS, AAP)
   │                                  │
   │                                  ├──[Video Service]──► V4L2 HW Decode ──► Qt EGLFS ──► HDMI ──► Display
   │                                  │
@@ -287,7 +290,7 @@ All processes except `piauto-main` are managed as systemd services. `piauto-main
 1. **Boot:** systemd starts `bluetoothd`, `pipewire`, `wireplumber`, then `piauto-main`.
 2. **IDLE:** `piauto-main` advertises BLE, launches splash Qt process (single long-lived process with `QStackedWidget` for view switching). User can tap "Setup" to enter BT speaker pairing without restarting the process.
 3. **BT_PAIRING → WIFI_WAIT:** `piauto-main` starts `hostapd` + `dnsmasq`.
-4. **TCP_CONNECT:** `piauto-main` kills the splash process (releases DRM master), launches `openauto` (Qt EGLFS). OpenAuto takes over the display and listens on TCP 5288.
+4. **TCP_CONNECT:** `piauto-main` kills the splash process (releases DRM master), launches `openauto` (Qt EGLFS). OpenAuto takes over the display and listens on TCP 5000.
 5. **PROJECTION_ACTIVE:** OpenAuto handles everything. `piauto-main` monitors OpenAuto's process and GPIO 17.
 6. **Disconnect:** OpenAuto exits. `piauto-main` reclaims the display (relaunches splash), stops `hostapd`, returns to IDLE.
 7. **Shutdown:** `piauto-main` kills all child processes, runs `shutdown -h now`.
