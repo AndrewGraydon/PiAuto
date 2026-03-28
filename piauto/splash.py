@@ -141,6 +141,7 @@ class SplashManager:
             "QT_QPA_EGLFS_KMS_CONFIG": os.environ.get(
                 "QT_QPA_EGLFS_KMS_CONFIG", "/data/eglfs.json"
             ),
+            "QT_QPA_EGLFS_HIDECURSOR": "1",
             "QT_QPA_GENERIC_PLUGINS": "evdevtouch",
             "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS": os.environ.get(
                 "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS",
