@@ -585,9 +585,9 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-001 | WAA BLE Advertisement             | T      | Pass    | 2026-03-28 | Phone discovers PiAuto via WAA BLE scan |
 | TC-002 | BLE Pairing & Handshake           | D      | Pass    | 2026-03-28 | RFCOMM NewConnection received, IDLE → BT_PAIRING |
 | TC-003 | WifiStartRequest Delivery         | T      | Pass    | 2026-03-28 | Credentials exchanged, state → WIFI_WAIT |
-| TC-004 | Pairing Record Persistence        | T      | Pending |            |       |
+| TC-004 | Pairing Record Persistence        | T      | Partial | 2026-03-28 | Record saved; reboot/eviction test pending |
 | TC-005 | Auto-Reconnect                    | D      | Pending |            |       |
-| TC-006 | AP Configuration                  | T      | Partial | 2026-03-28 | AP running, phone connects; 5 GHz channel not formally verified |
+| TC-006 | AP Configuration                  | T      | Partial | 2026-03-28 | NM AP on uap0 works; channel 48 (2.4 GHz) not matching config channel 149 (5 GHz) |
 | TC-007 | DHCP Lease Assignment             | T      | Pass    | 2026-03-28 | Phone received IP on AP subnet |
 | TC-008 | TCP Listen Port 5000              | T      | Pass    | 2026-03-28 | Verified via `ss -tlnH` during BT_PAIRING |
 | TC-009 | TLS + Version + Service Discovery | T      | Pass    | 2026-03-28 | AA projection fully operational |
@@ -602,7 +602,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-018 | Multi-Touch                       | T      | Fail    | 2026-03-28 | HW supports 6-point MT; OpenAuto sends single-touch only (upstream limit) |
 | TC-019 | Ignition Sense Detection          | M      | Blocked |            | GPIO 17 not wired yet |
 | TC-020 | Clean Shutdown                    | M      | Blocked |            | Requires ignition GPIO |
-| TC-021 | Auto-Boot on Power                | T      | Pending |            |       |
+| TC-021 | Auto-Boot on Power                | T      | Pass    | 2026-03-28 | piauto.service enabled, starts on boot |
 | TC-022 | Fan PWM Control                   | M      | Blocked |            | Fan not connected yet |
 | TC-023 | Splash Screen                     | D      | Pass    | 2026-03-28 | Status text shown, transitions to AA |
 | TC-024 | Night Mode Sensor                 | T      | Pending |            |       |
@@ -616,7 +616,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-032 | 12-Hour Soak Test                 | T      | Pending |            |       |
 | TC-033 | Config & Logging Inspection       | I      | Pass    | 2026-03-28 | Single YAML config, journald only, no log files |
 | TC-034 | BT Speaker Mid-Session Disconnect | T      | Pending |            |       |
-| TC-035 | Clock Initialization (No RTC)     | T+I    | Pending |            |       |
+| TC-035 | Clock Initialization (No RTC)     | T+I    | Partial | 2026-03-28 | /data/clock saved; restore-on-boot needs reboot verification |
 | TC-036 | BT_PAIRING Timeout                | T      | Pending |            |       |
 | TC-037 | TCP_CONNECT Timeout               | T      | Pending |            |       |
 | TC-038 | Boot Timeout                      | T      | Pending |            |       |
@@ -626,4 +626,4 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-042 | Return to Splash on Disconnect    | T      | Pass    | 2026-03-28 | onAndroidAutoQuit detected, splash shown |
 | TC-043 | Single-Tap (No Double-Tap)        | T      | Pass    | 2026-03-28 | libinput disabled, evdevtouch:grab |
 | TC-044 | USB BT Dongle for Speaker         | T      | Pass    | 2026-03-28 | hci1 USB, no stuttering |
-| TC-045 | AP+STA Dual Interface             | T      | Pending |            |       |
+| TC-045 | AP+STA Dual Interface             | T      | Pass    | 2026-03-28 | uap0 AP (192.168.50.1) + wlan0 STA (10.10.0.190) simultaneous |
