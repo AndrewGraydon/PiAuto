@@ -16,8 +16,11 @@ ownership invariant (only one process owns DRM at a time).
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import json
 import os
 import sys
+from pathlib import Path
 
 from piauto.log import get_logger
 
@@ -25,6 +28,57 @@ log = get_logger("splash")
 
 # DRM handoff safety margin (ms) — see PiAuto-IG-001 §9.3
 DRM_RELEASE_DELAY = 0.5
+
+EGLFS_CONFIG_PATH = Path("/data/eglfs.json")
+
+
+def detect_drm_card() -> str:
+    """Detect the DRM card that supports KMS modesetting.
+
+    On Pi 4, card0 and card1 can swap between reboots (platform-gpu vs v3d).
+    The display controller is the one where drmModeGetResources succeeds.
+    Returns the device path, e.g. '/dev/dri/card1'.
+    """
+    try:
+        libdrm = ctypes.CDLL("libdrm.so.2")
+    except OSError:
+        log.warning("libdrm not available — defaulting to /dev/dri/card0")
+        return "/dev/dri/card0"
+
+    for i in range(2):
+        path = f"/dev/dri/card{i}"
+        try:
+            fd = os.open(path, os.O_RDWR)
+            try:
+                res = libdrm.drmModeGetResources(fd)
+                if res:
+                    log.info("DRM display card detected: %s", path)
+                    return path
+            finally:
+                os.close(fd)
+        except OSError:
+            continue
+
+    log.warning("No KMS-capable DRM card found — defaulting to /dev/dri/card0")
+    return "/dev/dri/card0"
+
+
+def write_eglfs_config(
+    output_name: str = "HDMI2",
+    mode: str = "1024x600",
+) -> Path:
+    """Detect the correct DRM card and write /data/eglfs.json.
+
+    Called once at boot to handle Pi 4 card0/card1 swapping.
+    """
+    device = detect_drm_card()
+    config = {
+        "device": device,
+        "outputs": [{"name": output_name, "mode": mode}],
+    }
+    EGLFS_CONFIG_PATH.write_text(json.dumps(config, indent=4))
+    log.info("EGLFS config written: %s → %s %s", device, output_name, mode)
+    return EGLFS_CONFIG_PATH
 
 
 class SplashManager:
@@ -47,6 +101,9 @@ class SplashManager:
         env = {
             **os.environ,
             "QT_QPA_PLATFORM": "eglfs",
+            "QT_QPA_EGLFS_KMS_CONFIG": os.environ.get(
+                "QT_QPA_EGLFS_KMS_CONFIG", "/data/eglfs.json"
+            ),
         }
 
         try:

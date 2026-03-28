@@ -30,7 +30,7 @@ from piauto.config import PiAutoConfig, load_config
 from piauto.gpio import GpioManager
 from piauto.log import get_logger, setup_logging
 from piauto.openauto import OpenAutoManager, ensure_tls_cert
-from piauto.splash import SplashManager
+from piauto.splash import SplashManager, write_eglfs_config
 from piauto.thermal import ThermalMonitor
 from piauto.wifi import WifiManager
 
@@ -175,6 +175,10 @@ class StateMachine:
                 # Start thermal monitoring
                 self._thermal = ThermalMonitor(self._config.thermal, self._gpio)
                 self._thermal_task = asyncio.create_task(self._thermal.run())
+
+                # Detect DRM card and write EGLFS config
+                # (Pi 4 card0/card1 can swap between reboots)
+                write_eglfs_config()
 
                 # Initialize splash screen
                 self._splash = SplashManager()

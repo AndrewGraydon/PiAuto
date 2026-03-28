@@ -82,7 +82,7 @@ sudo apt install -y \
     python3-dbus \
     openssl \
     fake-hwclock \
-    qt5-default \
+    python3-pyqt5 \
     libqt5multimedia5 \
     libqt5multimedia5-plugins \
     libqt5multimediawidgets5
@@ -154,15 +154,11 @@ echo "build-date: $(date -Is)" | sudo tee -a /data/build-info.txt
 
 ### 5.1 Display and GPU — `/boot/firmware/config.txt`
 
-Add or modify these lines:
+> **WARNING:** On RPi OS Trixie with the KMS display driver (`dtoverlay=vc4-kms-v3d`), do NOT add legacy display settings (`hdmi_group`, `hdmi_mode`, `hdmi_cvt`, `hdmi_drive`). These conflict with KMS and will cause a blank screen on boot.
+
+The KMS driver auto-detects the display resolution. No display-specific config.txt changes are needed. Optionally add:
 
 ```ini
-# PiAuto Display — LCDWiki 7" HDMI-B (800x480)
-hdmi_group=2
-hdmi_mode=87
-hdmi_cvt 800 480 60 6 0 0 0
-hdmi_drive=2
-
 # GPU memory for V4L2 H.264 decode + Qt EGLFS
 gpu_mem=128
 
@@ -278,16 +274,18 @@ sudo systemctl disable --now \
     e2scrub_all.timer \
     fstrim.timer \
     ModemManager.service \
-    wpa_supplicant.service \
     avahi-daemon.service \
     triggerhappy.service
 ```
 
-> **Note:** `wpa_supplicant` is disabled because the Pi runs as an AP (hostapd), not a WiFi client. If you need WiFi client mode for development, keep it enabled temporarily.
+> **WARNING:** Do NOT disable `wpa_supplicant.service` — even though the Pi runs as an AP (hostapd) in production, disabling wpa_supplicant will kill any existing WiFi client connection (including SSH). Leave it enabled until the Pi has a dedicated AP-mode WiFi adapter or wired Ethernet.
 
-### 8.2 Enable Required Services
+### 8.2 Unblock Bluetooth and Enable Required Services
+
+Bluetooth is soft-blocked by rfkill by default on RPi OS. Unblock it before enabling BlueZ:
 
 ```bash
+sudo rfkill unblock bluetooth
 sudo systemctl enable bluetooth.service
 sudo systemctl enable pipewire.service
 sudo systemctl enable wireplumber.service
@@ -371,7 +369,7 @@ bluetooth:
   speaker_mac: ""
 
 display:
-  resolution: "800x480"
+  resolution: "1024x600"
   fps: 30
 
 audio:
@@ -444,17 +442,23 @@ Create `/data/eglfs.json`:
 
 ```json
 {
-    "device": "/dev/dri/card1",
+    "device": "/dev/dri/card0",
     "outputs": [
         {
-            "name": "HDMI1",
-            "mode": "800x480"
+            "name": "HDMI2",
+            "mode": "1024x600"
         }
     ]
 }
 ```
 
-> The device path may be `/dev/dri/card0` or `/dev/dri/card1` depending on the Pi's DRM driver. Check with `ls /dev/dri/` and `cat /sys/class/drm/card*/device/uevent`.
+> **Important notes:**
+> - On Pi 4, **card0** (`platform-gpu`) is the KMS display controller. **card1** (`v3d`) is the render-only GPU — it will fail with `drmModeGetResources failed` if used for display. Do not be misled by connector entries under `/sys/class/drm/card1-*` — those are sysfs aliases.
+> - The Pi 4 has two micro-HDMI ports: HDMI-A-1 (`HDMI1`, micro-HDMI 0) and HDMI-A-2 (`HDMI2`, micro-HDMI 1). Check which is connected:
+>   ```bash
+>   for f in /sys/class/drm/card*-HDMI-*/status; do echo "$f: $(cat $f)"; done
+>   ```
+> - The LCDWiki 7" HDMI-B display reports **1024x600** native resolution (not 800x480 as marketed).
 
 ### 11.2 Verify EGLFS Works
 
@@ -476,7 +480,7 @@ Run these checks after setup to confirm everything is ready:
 | 3 | BlueZ running | `systemctl status bluetooth` | active |
 | 4 | PipeWire running | `systemctl --user status pipewire` | active |
 | 5 | GPU memory | `vcgencmd get_mem gpu` | 128M |
-| 6 | Display resolution | `cat /sys/class/drm/card*/modes` | 800x480 |
+| 6 | Display resolution | `cat /sys/class/drm/card0-HDMI-A-2/modes \| head -1` | 1024x600 |
 | 7 | /data mounted | `mount \| grep /data` | ext4, rw |
 | 8 | OpenAuto binary | `ls -la /usr/local/bin/openauto` | exists |
 | 9 | hostapd available | `which hostapd` | /usr/sbin/hostapd |
@@ -529,7 +533,7 @@ journalctl -t piauto -f
 | Symptom | Likely Cause | Fix |
 | :------ | :----------- | :-- |
 | No splash screen | EGLFS can't acquire DRM | Check `/data/eglfs.json` device path. Ensure no other process holds DRM. |
-| BLE not advertising | BlueZ not running or no BLE support | `systemctl restart bluetooth`. Check `hciconfig`. |
+| BLE not advertising | BT soft-blocked or BlueZ not running | `rfkill unblock bluetooth && systemctl restart bluetooth`. Check `rfkill list`. |
 | Phone won't connect to WiFi | hostapd failed (bad channel/country) | Check `journalctl -u piauto` for hostapd errors. Verify `wifi.country` matches your region. |
 | No audio from speaker | A2DP not connected | `bluetoothctl connect XX:XX:XX:XX:XX:XX`. Check `wpctl status`. |
 | Boot timeout (60 s) | Service dependency not met | Check which service failed: `systemctl --failed`. |
