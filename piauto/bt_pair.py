@@ -1,0 +1,290 @@
+"""Bluetooth BR/EDR discovery and pairing via dbus-next.
+
+Provides CLI commands for the splash screen BT setup UI:
+  python3 -m piauto.bt_pair scan     — BR/EDR discovery, prints DEVICE lines
+  python3 -m piauto.bt_pair pair MAC — register agent, trust, pair, connect
+
+BlueZ's D-Bus StartDiscovery requires a persistent client connection to
+maintain the inquiry session. bluetoothctl's non-interactive mode drops
+the connection too quickly for BR/EDR results to appear. This module
+keeps the D-Bus connection alive for the full operation.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+
+# Audio device classes (Major Device Class = 0x04, bits 12-8)
+_AUDIO_MAJOR_CLASS = 0x04
+_AUDIO_CLASS_MASK = 0x1F00  # bits 12-8
+
+
+def _is_audio_device(device_class: int) -> bool:
+    """Check if a Bluetooth device class indicates an audio device."""
+    major = (device_class >> 8) & 0x1F
+    return major == _AUDIO_MAJOR_CLASS
+
+
+async def scan(duration: float = 12.0) -> None:
+    """Perform BR/EDR discovery and print found devices to stdout.
+
+    Output format: DEVICE:<mac>:<name>:<class_hex>
+    Prints SCAN_DONE when finished.
+    """
+    from dbus_next.aio import MessageBus
+    from dbus_next import BusType, Variant
+
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+
+    try:
+        introspect = await bus.introspect("org.bluez", "/org/bluez/hci0")
+        adapter = bus.get_proxy_object("org.bluez", "/org/bluez/hci0", introspect)
+        adapter_iface = adapter.get_interface("org.bluez.Adapter1")
+
+        await adapter_iface.call_set_discovery_filter(
+            {"Transport": Variant("s", "bredr")}
+        )
+        await adapter_iface.call_start_discovery()
+
+        seen: set[str] = set()
+        end_time = asyncio.get_event_loop().time() + duration
+
+        while asyncio.get_event_loop().time() < end_time:
+            await asyncio.sleep(1.0)
+
+            # Introspect adapter to find child device paths
+            adapter_intro = await bus.introspect("org.bluez", "/org/bluez/hci0")
+            for node in adapter_intro.nodes:
+                dev_path = f"/org/bluez/hci0/{node.name}"
+                if dev_path in seen:
+                    continue
+
+                try:
+                    dev_intro = await bus.introspect("org.bluez", dev_path)
+                    ifaces = [i.name for i in dev_intro.interfaces]
+                    if "org.bluez.Device1" not in ifaces:
+                        continue
+
+                    dev = bus.get_proxy_object("org.bluez", dev_path, dev_intro)
+                    props = dev.get_interface("org.freedesktop.DBus.Properties")
+
+                    name_v = await props.call_get("org.bluez.Device1", "Name")
+                    cls_v = await props.call_get("org.bluez.Device1", "Class")
+                    addr_v = await props.call_get("org.bluez.Device1", "Address")
+
+                    mac = addr_v.value
+                    name = name_v.value
+                    dev_class = cls_v.value if cls_v.value else 0
+
+                    seen.add(dev_path)
+                    print(f"DEVICE|{mac}|{name}|{dev_class:#08x}", flush=True)
+                except Exception:
+                    continue
+
+        try:
+            await adapter_iface.call_stop_discovery()
+        except Exception:
+            pass
+
+    finally:
+        print("SCAN_DONE", flush=True)
+        bus.disconnect()
+
+
+async def pair(mac: str) -> None:
+    """Trust, pair, and connect to a device by MAC address.
+
+    Registers a NoInputNoOutput agent for auto-accept pairing.
+    Performs BR/EDR discovery first if the device isn't already known.
+
+    Output: PAIR_OK:<mac>:<name> on success, PAIR_FAIL:<message> on failure.
+    """
+    from dbus_next.aio import MessageBus
+    from dbus_next import BusType, Variant
+    from dbus_next.service import ServiceInterface, method
+
+    class PairingAgent(ServiceInterface):
+        def __init__(self):
+            super().__init__("org.bluez.Agent1")
+
+        @method()
+        def Release(self):
+            pass
+
+        @method()
+        def RequestConfirmation(self, device: "o", passkey: "u"):
+            pass  # auto-confirm
+
+        @method()
+        def AuthorizeService(self, device: "o", uuid: "s"):
+            pass  # auto-authorize
+
+        @method()
+        def RequestAuthorization(self, device: "o"):
+            pass  # auto-authorize
+
+        @method()
+        def Cancel(self):
+            pass
+
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+
+    try:
+        # Register pairing agent
+        agent_path = "/piauto/bt_pair_agent"
+        agent = PairingAgent()
+        bus.export(agent_path, agent)
+
+        bluez_intro = await bus.introspect("org.bluez", "/org/bluez")
+        bluez = bus.get_proxy_object("org.bluez", "/org/bluez", bluez_intro)
+        agent_mgr = bluez.get_interface("org.bluez.AgentManager1")
+        await agent_mgr.call_register_agent(agent_path, "NoInputNoOutput")
+        await agent_mgr.call_request_default_agent(agent_path)
+
+        # Ensure device is in BlueZ D-Bus tree via BR/EDR discovery
+        dev_path = "/org/bluez/hci0/dev_" + mac.replace(":", "_")
+
+        try:
+            dev_intro = await bus.introspect("org.bluez", dev_path)
+            ifaces = [i.name for i in dev_intro.interfaces]
+            if "org.bluez.Device1" not in ifaces:
+                raise Exception("no Device1")
+        except Exception:
+            # Device not known — run brief BR/EDR discovery
+            adapter_intro = await bus.introspect("org.bluez", "/org/bluez/hci0")
+            adapter = bus.get_proxy_object(
+                "org.bluez", "/org/bluez/hci0", adapter_intro
+            )
+            adapter_iface = adapter.get_interface("org.bluez.Adapter1")
+
+            await adapter_iface.call_set_discovery_filter(
+                {"Transport": Variant("s", "bredr")}
+            )
+            await adapter_iface.call_start_discovery()
+
+            found = False
+            for _ in range(15):
+                await asyncio.sleep(1)
+                try:
+                    dev_intro = await bus.introspect("org.bluez", dev_path)
+                    ifaces = [i.name for i in dev_intro.interfaces]
+                    if "org.bluez.Device1" in ifaces:
+                        found = True
+                        break
+                except Exception:
+                    continue
+
+            try:
+                await adapter_iface.call_stop_discovery()
+            except Exception:
+                pass
+
+            if not found:
+                print(f"PAIR_FAIL|Device {mac} not found", flush=True)
+                return
+
+        # Trust, pair, connect
+        dev_intro = await bus.introspect("org.bluez", dev_path)
+        device = bus.get_proxy_object("org.bluez", dev_path, dev_intro)
+        dev_iface = device.get_interface("org.bluez.Device1")
+        props = device.get_interface("org.freedesktop.DBus.Properties")
+
+        name_v = await props.call_get("org.bluez.Device1", "Name")
+        name = name_v.value
+
+        # Trust
+        await props.call_set("org.bluez.Device1", "Trusted", Variant("b", True))
+
+        # Pair
+        try:
+            paired_v = await props.call_get("org.bluez.Device1", "Paired")
+            if not paired_v.value:
+                await dev_iface.call_pair()
+        except Exception as e:
+            if "AlreadyExists" not in str(e):
+                print(f"PAIR_FAIL|Pairing failed: {e}", flush=True)
+                return
+
+        await asyncio.sleep(1)
+
+        # Wait for A2DP endpoints to be registered by WirePlumber before
+        # attempting connect. Without endpoints, connect fails with
+        # profile-unavailable.
+        adapter_intro2 = await bus.introspect("org.bluez", "/org/bluez/hci0")
+        adapter2 = bus.get_proxy_object(
+            "org.bluez", "/org/bluez/hci0", adapter_intro2
+        )
+        media_iface = adapter2.get_interface("org.bluez.Media1")
+        adapter_props = adapter2.get_interface("org.freedesktop.DBus.Properties")
+        for wait in range(10):
+            try:
+                uuids = await adapter_props.call_get(
+                    "org.bluez.Media1", "SupportedUUIDs"
+                )
+                if uuids.value:
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+
+        # Connect (retry on profile-unavailable — WirePlumber may still be
+        # registering A2DP endpoints after a service restart).
+        # Disconnect between retries to clear stale ACL connections.
+        last_err = None
+        for attempt in range(6):
+            try:
+                await dev_iface.call_connect()
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                if "profile-unavailable" in str(e) and attempt < 3:
+                    try:
+                        await dev_iface.call_disconnect()
+                    except Exception:
+                        pass
+                    await asyncio.sleep(3)
+                    continue
+                break
+
+        if last_err is not None:
+            try:
+                await dev_iface.call_disconnect()
+            except Exception:
+                pass
+            print(f"PAIR_FAIL|Connect failed: {last_err}", flush=True)
+            return
+
+        # Wait for A2DP profile to fully establish before releasing the
+        # D-Bus session. Without this, BlueZ may drop the connection when
+        # our client disconnects.
+        await asyncio.sleep(5)
+
+        connected_v = await props.call_get("org.bluez.Device1", "Connected")
+        if connected_v.value:
+            print(f"PAIR_OK|{mac}|{name}", flush=True)
+            # Hold session open so BlueZ fully settles the A2DP transport
+            await asyncio.sleep(5)
+        else:
+            print(f"PAIR_FAIL|Connection not established", flush=True)
+
+    except Exception as e:
+        print(f"PAIR_FAIL|{e}", flush=True)
+    finally:
+        bus.disconnect()
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python3 -m piauto.bt_pair <scan|pair MAC>", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+    if cmd == "scan":
+        asyncio.run(scan())
+    elif cmd == "pair" and len(sys.argv) >= 3:
+        asyncio.run(pair(sys.argv[2]))
+    else:
+        print(f"Unknown command: {cmd}", file=sys.stderr)
+        sys.exit(1)

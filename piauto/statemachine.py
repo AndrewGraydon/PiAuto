@@ -227,12 +227,23 @@ class StateMachine:
         # Start BLE advertising
         await self._ble.start_advertising()
 
-        # Wait for phone or ignition off
+        # Monitor splash stdout for "SETUP" button press
+        async def _watch_splash_stdout():
+            while True:
+                line = await self._splash.read_stdout_line()
+                if line == "SETUP":
+                    return "SETUP"
+                if line is None:
+                    # Splash exited or no more output
+                    await asyncio.sleep(0.5)
+
+        # Wait for phone, ignition off, or setup button
         phone_task = asyncio.create_task(self._ble.wait_for_phone())
         ignition_task = asyncio.create_task(self._ignition_off.wait())
+        setup_task = asyncio.create_task(_watch_splash_stdout())
 
         done, pending = await asyncio.wait(
-            [phone_task, ignition_task],
+            [phone_task, ignition_task, setup_task],
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -243,6 +254,12 @@ class StateMachine:
             self._transition(State.SHUTDOWN, Event.IGNITION_OFF)
             return
 
+        if setup_task in done:
+            log.info("Setup requested — launching BT speaker pairing UI")
+            await self._ble.stop_advertising()
+            await self._handle_bt_setup()
+            return
+
         phone = phone_task.result()
         if phone:
             self._current_phone = phone
@@ -251,6 +268,29 @@ class StateMachine:
         else:
             # Shouldn't happen unless cancelled — stay in IDLE
             log.debug("Phone detection returned None — remaining in IDLE")
+
+    async def _handle_bt_setup(self) -> None:
+        """Run the BT speaker pairing UI, then return to IDLE."""
+        await self._splash.launch_bt_setup()
+        log.info("BT setup UI active — waiting for user to finish")
+
+        # Read stdout lines from the UI until it exits or user presses Back
+        while self._splash.is_running:
+            line = await self._splash.read_stdout_line()
+            if line is None:
+                await asyncio.sleep(0.5)
+                continue
+            if line == "BACK":
+                log.info("BT setup: user pressed Back")
+                break
+            if line.startswith("PAIRED:"):
+                parts = line.split(":", 2)
+                if len(parts) == 3:
+                    mac, name = parts[1], parts[2]
+                    log.info("BT speaker paired: %s (%s)", name, mac)
+
+        # Return to IDLE
+        self._transition(State.IDLE, Event.SERVICES_STARTED)
 
     # ── BT_PAIRING ───────────────────────────────────────────
 
