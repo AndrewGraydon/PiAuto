@@ -18,6 +18,7 @@ from pathlib import Path
 
 from piauto.config import OpenAutoConfig
 from piauto.log import get_logger
+from piauto.splash import _detect_touchscreen_device
 
 log = get_logger("openauto")
 
@@ -104,6 +105,11 @@ class OpenAutoManager:
             "QT_QPA_PLATFORM": "eglfs",
             "QT_QPA_EGLFS_KMS_CONFIG": os.environ.get(
                 "QT_QPA_EGLFS_KMS_CONFIG", "/data/eglfs.json"
+            ),
+            "QT_QPA_GENERIC_PLUGINS": "evdevtouch",
+            "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS": os.environ.get(
+                "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS",
+                _detect_touchscreen_device(),
             ),
         }
 

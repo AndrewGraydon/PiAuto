@@ -81,6 +81,43 @@ def write_eglfs_config(
     return EGLFS_CONFIG_PATH
 
 
+def _detect_touchscreen_device() -> str:
+    """Find the evdev node for the USB touchscreen.
+
+    Scans /proc/bus/input/devices for a device with INPUT_PROP_DIRECT
+    (property bit 1), which indicates a touchscreen. Returns the
+    /dev/input/eventN path, or empty string if not found.
+    """
+    try:
+        with open("/proc/bus/input/devices") as f:
+            content = f.read()
+    except OSError:
+        return ""
+
+    current_handlers = ""
+    for line in content.splitlines():
+        if line.startswith("H: Handlers="):
+            current_handlers = line
+        elif line.startswith("B: PROP=") and current_handlers:
+            # PROP bit 1 = INPUT_PROP_DIRECT (touchscreen)
+            try:
+                prop_val = int(line.split("=")[1], 16)
+            except (ValueError, IndexError):
+                continue
+            if prop_val & 0x2:
+                # Extract eventN from handlers line
+                for part in current_handlers.split():
+                    if part.startswith("event"):
+                        device = f"/dev/input/{part}"
+                        log.info("Touchscreen detected: %s", device)
+                        return device
+        elif line == "":
+            current_handlers = ""
+
+    log.warning("No touchscreen device found")
+    return ""
+
+
 class SplashManager:
     """Manages the splash screen subprocess."""
 
@@ -103,6 +140,11 @@ class SplashManager:
             "QT_QPA_PLATFORM": "eglfs",
             "QT_QPA_EGLFS_KMS_CONFIG": os.environ.get(
                 "QT_QPA_EGLFS_KMS_CONFIG", "/data/eglfs.json"
+            ),
+            "QT_QPA_GENERIC_PLUGINS": "evdevtouch",
+            "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS": os.environ.get(
+                "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS",
+                _detect_touchscreen_device(),
             ),
         }
 
