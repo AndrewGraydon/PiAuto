@@ -585,8 +585,8 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-001 | WAA BLE Advertisement             | T      | Pass    | 2026-03-28 | Phone discovers PiAuto via WAA BLE scan |
 | TC-002 | BLE Pairing & Handshake           | D      | Pass    | 2026-03-28 | RFCOMM NewConnection received, IDLE → BT_PAIRING |
 | TC-003 | WifiStartRequest Delivery         | T      | Pass    | 2026-03-28 | Credentials exchanged, state → WIFI_WAIT |
-| TC-004 | Pairing Record Persistence        | T      | Partial | 2026-03-28 | Record saved; reboot/eviction test pending |
-| TC-005 | Auto-Reconnect                    | D      | Pending |            |       |
+| TC-004 | Pairing Record Persistence        | T      | Pass    | 2026-03-28 | Pairing survives reboot; phone re-paired after clean wipe |
+| TC-005 | Auto-Reconnect                    | D      | Pass    | 2026-03-28 | Phone auto-connects via BLE/RFCOMM after reboot, no user action needed |
 | TC-006 | AP Configuration                  | T      | Partial | 2026-03-28 | NM AP on uap0 works; channel 48 (2.4 GHz) not matching config channel 149 (5 GHz) |
 | TC-007 | DHCP Lease Assignment             | T      | Pass    | 2026-03-28 | Phone received IP on AP subnet |
 | TC-008 | TCP Listen Port 5000              | T      | Pass    | 2026-03-28 | Verified via `ss -tlnH` during BT_PAIRING |
@@ -607,16 +607,16 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-023 | Splash Screen                     | D      | Pass    | 2026-03-28 | Status text shown, transitions to AA |
 | TC-024 | Night Mode Sensor                 | T      | Pending |            |       |
 | TC-025 | Read-Only Root & /data            | I+T    | Pending |            |       |
-| TC-026 | Boot Time                         | M      | Pending |            |       |
+| TC-026 | Boot Time                         | M      | Pass    | 2026-03-28 | BOOTING→IDLE in ~1s; systemd start to IDLE ~2s (req: <25s) |
 | TC-027 | Projection Latency                | M      | Pending |            | Requires camera setup |
 | TC-028 | Video Frame Rate                  | M      | Pending |            |       |
 | TC-029 | Audio Latency                     | M      | Pending |            | Requires recording equipment |
-| TC-030 | Connection Setup Time             | M      | Pending |            |       |
+| TC-030 | Connection Setup Time             | M      | Partial | 2026-03-28 | PhoneDetected→PROJECTION_ACTIVE 16s (req: <15s); WiFi join adds ~4s delay |
 | TC-031 | Power-Loss Resilience             | T      | Pending |            |       |
 | TC-032 | 12-Hour Soak Test                 | T      | Pending |            |       |
 | TC-033 | Config & Logging Inspection       | I      | Pass    | 2026-03-28 | Single YAML config, journald only, no log files |
 | TC-034 | BT Speaker Mid-Session Disconnect | T      | Pending |            |       |
-| TC-035 | Clock Initialization (No RTC)     | T+I    | Partial | 2026-03-28 | /data/clock saved; restore-on-boot needs reboot verification |
+| TC-035 | Clock Initialization (No RTC)     | T+I    | Pass    | 2026-03-28 | System time ahead of saved /data/clock after reboot; correct time restored |
 | TC-036 | BT_PAIRING Timeout                | T      | Pending |            |       |
 | TC-037 | TCP_CONNECT Timeout               | T      | Pending |            |       |
 | TC-038 | Boot Timeout                      | T      | Pending |            |       |
