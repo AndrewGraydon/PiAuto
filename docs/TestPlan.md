@@ -627,3 +627,14 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-043 | Single-Tap (No Double-Tap)        | T      | Pass    | 2026-03-28 | libinput disabled, evdevtouch:grab |
 | TC-044 | USB BT Dongle for Speaker         | T      | Pass    | 2026-03-28 | hci1 USB, no stuttering |
 | TC-045 | AP+STA Dual Interface             | T      | Pass    | 2026-03-28 | uap0 AP (192.168.50.1) + wlan0 STA (10.10.0.190) simultaneous |
+
+---
+
+## 26. Known Issues
+
+| ID | Summary | Severity | Root Cause | Status |
+| :- | :------ | :------- | :--------- | :----- |
+| KI-001 | Audio stutter when notifications or Gemini trigger during music playback | Medium | RtAudio race condition in opencardev/openauto — three audio stream instances (media, guidance, system) concurrently access shared RtAudio buffers without synchronization. OpenDsh fork PR #32 adds a static mutex fix. | Open — OpenDsh binary built but blocked on GSTVideoOutput rewrite (qt-gstreamer removed from Debian 13). See Implementation §2.4. |
+| KI-002 | OpenDsh binary: video sizing and touch input broken on EGLFS | High | Built with `-DGST_BUILD=FALSE` due to missing qt-gstreamer. Falls back to `QtVideoOutput` (QMediaPlayer + QVideoWidget) which cannot properly render raw H.264 NAL units on EGLFS. The `GSTVideoOutput` path (direct GStreamer pipeline) is required. | Open — needs GSTVideoOutput rewrite using plain GStreamer C API. OpenDsh binary saved at `/usr/local/bin/autoapp-opendsh`. |
+| KI-003 | Phone occasionally reconnects to house WiFi instead of PiAuto AP | Low | After WiFi toggle or extended idle, phone's WiFi auto-join prioritizes known networks over PiAuto AP. Usually resolves after BT disconnect/reconnect cycle triggers fresh credential exchange. | Intermittent — workaround is BT reconnect cycle. |
+| KI-004 | Connection setup time slightly exceeds 15s target | Low | PhoneDetected → PROJECTION_ACTIVE measured at 16s. WiFi join adds ~4s delay when phone must switch from house WiFi to PiAuto AP. | TC-030 partial pass. |

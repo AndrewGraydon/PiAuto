@@ -148,7 +148,9 @@ sudo make -j$(nproc)
 sudo make install
 ```
 
-> **Note:** `-DNOPI=ON` disables the Broadcom OMX/VideoCore (`bcm_host.h`) video path which doesn't exist on Trixie. Video output uses Qt's rendering pipeline instead. The resulting binary is `/usr/local/bin/autoapp`.
+> **Note:** `-DNOPI=ON` disables the Broadcom OMX/VideoCore (`bcm_host.h`) video path which doesn't exist on Trixie. Video output uses Qt's GStreamer pipeline instead. The resulting binary is `/usr/local/bin/autoapp`.
+
+> **OpenDsh migration (in progress):** The `opencardev` binary has an RtAudio race condition causing audio stutter during concurrent streams (e.g., music + notifications). The [OpenDsh fork](https://github.com/openDsh/openauto) fixes this (PR #32), but building on Debian 13 requires patches for OpenSSL 3.x, RtAudio 6.x, h264bitstream, and a rewrite of `GSTVideoOutput.cpp` to use plain GStreamer C API (qt-gstreamer was removed from Debian 13). See Implementation Guide §2.4 for full details. The patched OpenDsh binary is saved on the Pi at `/usr/local/bin/autoapp-opendsh` for future work.
 
 ### 4.3 Create OpenAuto Configuration
 
@@ -719,3 +721,5 @@ journalctl -t piauto -f
 | `br-connection-busy` on BT connect | Stale ACL connection from previous attempt | Disconnect first: `bluetoothctl disconnect XX:XX:XX:XX:XX:XX`, wait 3s, then retry. |
 | Boot timeout (60 s) | Service dependency not met | Check which service failed: `systemctl --failed`. |
 | OpenAuto crash | Missing libraries or DRM issue | Run `/usr/local/bin/autoapp` manually and check stderr. |
+| Audio stutter on notifications/Gemini | RtAudio race condition in opencardev binary | Upstream fix in OpenDsh PR #32 (static mutex). Migration blocked on GSTVideoOutput rewrite — see §4.2. |
+| OpenDsh binary: no video/touch | QtVideoOutput can't render raw H.264 on EGLFS | Requires GSTVideoOutput path. Rollback to opencardev binary: `sudo cp /usr/local/bin/autoapp-2026.03.28+git.4cc739b /usr/local/bin/autoapp`. |

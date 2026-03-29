@@ -477,6 +477,8 @@ OpenAuto outputs audio via RtAudio, which connects to PipeWire through the `pipe
 OpenAuto (RtAudio) → pipewire-pulse → PipeWire → WirePlumber → BlueZ A2DP → BT Speaker
 ```
 
+> **Known issue (KI-001):** The opencardev RtAudio backend creates three separate stream instances without synchronization. Concurrent buffer access causes audible stutter when multiple AA audio channels are active simultaneously (e.g., music + notification/Gemini). The OpenDsh fork adds a static mutex fix (PR #32). PipeWire buffer tuning (quantum, SBC-XQ) was tested but does not resolve the issue — the race condition is in the application layer, not the audio subsystem.
+
 ---
 
 ## 9. IF-07: Touch Input
