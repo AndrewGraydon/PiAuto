@@ -552,7 +552,7 @@ MAC=$(cat /sys/class/net/wlan0/address)
 AP_MAC=$(echo "$MAC" | sed 's/^\(..\)/\x02&/' | head -c 17)
 
 sudo tee /etc/udev/rules.d/90-uap0.rules << EOF
-ACTION=="add", SUBSYSTEM=="ieee80211", KERNEL=="phy0", RUN+="/usr/sbin/iw phy phy0 interface add uap0 type __ap", RUN+="/bin/ip link set dev uap0 address ${AP_MAC}"
+ACTION=="add", SUBSYSTEM=="ieee80211", KERNEL=="phy*", RUN+="/usr/sbin/iw phy %k interface add uap0 type __ap", RUN+="/bin/ip link set dev uap0 address ${AP_MAC}"
 EOF
 ```
 
