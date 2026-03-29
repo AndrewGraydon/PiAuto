@@ -26,7 +26,7 @@ Pi ──BT A2DP──► Vehicle Speaker (audio output)
 - **Multi-phone pairing** — stores up to 8 paired devices
 - **Touchscreen BT speaker setup** — on-screen UI for discovering and pairing Bluetooth speakers
 - **WiFi AP+STA** — simultaneous access point (for phone) and station (for SSH/internet) on one radio
-- **Hardware video decode** — H.264 via V4L2 on VideoCore VI
+- **Hardware video decode** — H.264 via GStreamer (`v4l2h264dec` on VideoCore VI, software fallback)
 - **Compositorless rendering** — Qt EGLFS direct to display (no X11/Wayland)
 - **Bluetooth audio output** — A2DP to vehicle speaker with 4 concurrent AA streams
 - **Ignition-sense power management** — clean boot/shutdown with vehicle ignition
@@ -91,22 +91,40 @@ piauto/
 
 ### On a Raspberry Pi
 
-See the full [Pi Setup Guide](docs/PiSetup.md) for hardware wiring, OS configuration, and OpenAuto build instructions.
+See the full [Pi Setup Guide](docs/PiSetup.md) for hardware wiring, OS configuration, and service setup.
 
 ```bash
-# Install system packages
-sudo apt install bluez hostapd dnsmasq pipewire wireplumber python3-pip
+# 1. Clone with submodules (includes aasdk and openauto source)
+git clone --recurse-submodules https://github.com/AndrewGraydon/PiAuto.git
+cd PiAuto
 
-# Install PiAuto
-pip install .
+# 2. Build and install OpenAuto + aasdk (~20 min on Pi 4B)
+bash scripts/build-openauto.sh
 
-# Create config
+# 3. Install runtime packages
+sudo apt install -y bluez hostapd dnsmasq pipewire wireplumber \
+    libqt5multimedia5-plugins gstreamer1.0-libav gstreamer1.0-plugins-bad \
+    python3-pip python3-pyqt5
+
+# 4. Install PiAuto
+sudo pip3 install --break-system-packages .
+
+# 5. Create config
 sudo mkdir -p /data
-sudo cp docs/piauto.example.yaml /data/piauto.yaml
-# Edit /data/piauto.yaml — change wifi.password and wifi.country
+sudo tee /data/piauto.yaml << 'EOF'
+wifi:
+  ssid: "PiAuto"
+  password: "changeme1"   # change this
+  channel: 149
+  country: "AU"           # change to your country code
+bluetooth:
+  device_name: "PiAuto"
+openauto:
+  binary: "/usr/local/bin/autoapp"
+EOF
 
-# Run
-python -m piauto
+# 6. Run
+sudo python3 -m piauto
 ```
 
 ### On a Development Machine
@@ -163,7 +181,7 @@ The project follows specification-driven development. All documents are in [`doc
 | [Hardware](docs/Hardware.md) | Hardware specification, GPIO pinout, BOM |
 | [Implementation](docs/Implementation.md) | Code structure, config schema, templates |
 | [Pi Setup](docs/PiSetup.md) | Raspberry Pi setup and deployment guide |
-| [Test Plan](docs/TestPlan.md) | 45 test cases with pass/fail criteria |
+| [Test Plan](docs/TestPlan.md) | 53 test cases with pass/fail criteria |
 | [RTM](docs/RTM.md) | Requirements Traceability Matrix (97% coverage) |
 
 ## Requirements
@@ -172,7 +190,7 @@ The project follows specification-driven development. All documents are in [`doc
 - **Pi:** Raspberry Pi 4 Model B (4 GB)
 - **OS:** Raspberry Pi OS Lite Trixie 64-bit
 - **Python:** 3.11+
-- **OpenAuto/aasdk:** Built from source (see [Pi Setup Guide](docs/PiSetup.md))
+- **OpenAuto/aasdk:** Built from source via `scripts/build-openauto.sh` (submodules included)
 - **Bluetooth speaker:** Any A2DP-capable audio receiver
 
 ## Project Status
@@ -190,9 +208,14 @@ This is a prototype/hobbyist project. The full specification suite is complete a
 - State machine orchestration with full error recovery and retry logic
 - Configurable logging (journald on Pi, stderr on dev) via `PIAUTO_LOG_LEVEL`
 
+**Pending verification (new binary built, awaiting test run):**
+- Audio stutter fix — RtAudio mutex (OpenDsh PR #32) incorporated into `AndrewGraydon/openauto`
+- GSTVideoOutput rewrite — plain GStreamer C API replacing removed qt-gstreamer, enabling correct H.264 rendering on EGLFS
+
 **Known issues:**
-- Audio stutter when concurrent streams are active (e.g., music + Gemini/notifications) — caused by RtAudio race condition in the upstream OpenAuto binary. Fix identified in OpenDsh fork (PR #32), migration in progress. See [Known Issues](docs/TestPlan.md#26-known-issues).
 - Phone occasionally reconnects to house WiFi instead of PiAuto AP after idle period
+
+See [Known Issues](docs/TestPlan.md#27-known-issues) for full details.
 
 ## License
 
