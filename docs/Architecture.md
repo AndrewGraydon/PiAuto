@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-ARCH-001              |
-| Version        | 3.0                          |
-| Date           | 2026-03-27                   |
+| Version        | 3.1                          |
+| Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
 ## 1. Introduction
@@ -65,8 +65,9 @@ graph TD
 
         subgraph "Layer 2: Connectivity"
             BZ[BlueZ 5.x<br/>BLE + Classic]
-            HA[hostapd<br/>5 GHz AP]
-            DHCP[dnsmasq<br/>DHCP Server]
+            NM[NetworkManager<br/>WiFi AP+STA]
+            HA[hostapd<br/>5 GHz AP optional]
+            DHCP[dnsmasq<br/>DHCP optional]
         end
 
         subgraph "Layer 3: Protocol"
@@ -87,10 +88,11 @@ graph TD
     end
 
     AA <-->|BLE Discovery| BZ
-    AA <-->|WiFi 5 GHz| HA
-    HA --> DHCP
+    AA <-->|WiFi 5 GHz| NM
+    NM --> HA
+    NM --> DHCP
     BZ --> SM
-    HA --> OA
+    NM --> OA
     OA --> V4L2
     OA --> PW
     OA --> QT
@@ -98,7 +100,7 @@ graph TD
     PW -->|BT A2DP| BZ
     TOUCH --> OA
     SM --> BZ
-    SM --> HA
+    SM --> NM
     SM --> OA
     SM --> GPIO
     SM --> QT
@@ -133,16 +135,16 @@ graph TD
 | Component       | Technology          | Satisfies              | Description |
 | :-------------- | :------------------ | :--------------------- | :---------- |
 | BlueZ           | BlueZ 5.x (D-Bus)  | FR-001 to FR-005, FR-025, FR-026 | Handles BLE WAA advertisement (discovery), RFCOMM Profile1 (credential exchange), Classic BT A2DP audio sink, and paired device storage. |
-| hostapd         | hostapd 2.10+       | FR-006 to FR-009       | Configures and runs the 5 GHz 802.11ac AP. Started/stopped by the state machine on demand. |
-| dnsmasq         | dnsmasq             | FR-010                 | Lightweight DHCP server for the AP interface. DHCP range is mode-dependent (see below). |
+| NetworkManager  | NetworkManager      | FR-006 to FR-010       | Manages the WiFi AP+STA configuration. The `uap0` virtual AP interface (SSID: PiAuto, 192.168.50.1/24) is created by a udev rule and managed by NM profile `piauto-ap`. `wlan0` STA remains connected to infrastructure WiFi. Both connections are brought up at boot by `piauto-wifi.service`. |
+| hostapd         | hostapd 2.10+       | FR-006 to FR-009       | Used in standalone (non-NM) mode only. When `uap0` is present and NM-managed, the Python `WifiManager` detects this via `_check_nm_managed_ap()` and skips hostapd/dnsmasq entirely. |
+| dnsmasq         | dnsmasq             | FR-010                 | Used in standalone (non-NM) mode only. In AP+STA mode, NetworkManager's built-in DHCP handles the `uap0` interface. |
 
 **Key design decisions:**
 
 - **BLE for discovery, RFCOMM for credentials, Classic BT for audio.** The WAA protocol uses BLE advertising for phone discovery only. The actual WiFi credential exchange happens over a Classic BT RFCOMM socket (BlueZ Profile1, channel 8). A2DP is used independently for audio output to the vehicle speaker. All three BT functions (BLE advert, RFCOMM profile, A2DP sink) run concurrently.
 - BlueZ is controlled via its D-Bus API (not direct HCI), which is the supported and stable interface. BlueZ 5.x supports BLE advertising, RFCOMM profiles, and Classic A2DP simultaneously.
-- hostapd is started only when needed (after RFCOMM credential exchange) and stopped when projection ends, to conserve radio resources and reduce interference.
-- **WiFi AP+STA mode:** The Pi 4B's BCM43455 supports concurrent AP and station on the same radio (same channel). A virtual `uap0` interface hosts the AP (192.168.50.1/24) while `wlan0` maintains infrastructure connectivity. In standalone mode, `wlan0` hosts the AP directly (192.168.1.1/24). Mode is auto-detected at runtime by checking for `/sys/class/net/uap0`; if present, hostapd binds to `uap0`, otherwise it binds to `wlan0`.
-- dnsmasq was chosen over isc-dhcp-server for minimal footprint.
+- **WiFi AP+STA mode (NetworkManager-managed):** The Pi 4B's BCM43455 supports concurrent AP and station on the same radio (same channel). A virtual `uap0` interface is created at boot by a udev rule (`/etc/udev/rules.d/90-uap0.rules`) and managed by a NetworkManager connection profile `piauto-ap`. The `wlan0` STA connection (profile `netplan-wlan0-Graydons5G`) connects to the home router. Both are brought up by `/etc/systemd/system/piauto-wifi.service` which retries until both interfaces are active. WiFi power saving is disabled system-wide via `/etc/NetworkManager/conf.d/wifi-powersave.conf`. PiAuto's `WifiManager` detects the NM-managed AP at runtime and skips the hostapd/dnsmasq path.
+- **Standalone mode:** If `uap0` is not present, `WifiManager` falls back to running hostapd on `wlan0` (192.168.1.1/24) with dnsmasq for DHCP. This path is retained for environments without the AP+STA NM configuration.
 - **BR/EDR speaker pairing** uses `piauto.bt_pair` with dbus-next persistent D-Bus connections instead of `bluetoothctl`, which drops the connection too quickly for BR/EDR inquiry results to appear.
 
 ### 4.3 Layer 3: Protocol
@@ -181,19 +183,21 @@ graph TD
 
 | Component       | Technology          | Satisfies              | Description |
 | :-------------- | :------------------ | :--------------------- | :---------- |
-| Qt 5 EGLFS      | Qt 5.15, EGLFS plugin | FR-017, FR-036, FR-037 | Direct KMS/DRM rendering without X11 or Wayland. Qt's EGLFS plugin renders OpenAuto's UI directly to the HDMI framebuffer. Also used by the splash screen — a single long-lived Qt process with `QStackedWidget` that switches views (idle, BT setup) via stdin commands without releasing DRM master. |
-| V4L2 Decoder    | GStreamer (v4l2h264dec) | FR-016, PR-003      | Hardware H.264 Baseline Profile decoding on the Pi 4's VideoCore VI, accessed via the GStreamer `v4l2h264dec` element inside the `GSTVideoOutput` pipeline. Falls back to software decode (`avdec_h264`) if V4L2 is unavailable. Decoded RGB frames are delivered via `GstAppSink` and rendered by `VideoWidget` (QPainter). |
+| Qt 5 EGLFS      | Qt 5.15, EGLFS plugin | FR-017, FR-036, FR-037 | Direct KMS/DRM rendering without X11 or Wayland. Qt's EGLFS plugin renders OpenAuto's UI directly to the HDMI framebuffer via KMS/DRM. Screen resolution: 1024×600. Also used by the splash screen — a single long-lived Qt process with `QStackedWidget` that switches views (idle, BT setup) via stdin commands without releasing DRM master. |
+| V4L2 Decoder    | GStreamer (v4l2h264dec) | FR-016, PR-003      | Hardware H.264 Baseline Profile decoding on the Pi 4's VideoCore VI, accessed via the GStreamer `v4l2h264dec` element inside the `GSTVideoOutput` pipeline. Falls back to software decode (`avdec_h264`) if V4L2 is unavailable. Decoded RGB frames are delivered via `GstAppSink` callback and rendered by `VideoWidget` (QPainter). A 30 FPS `QTimer` on the Qt main thread drives repaints, decoupling GStreamer's decode thread from the Qt event queue. |
 | PipeWire        | PipeWire 0.3+       | FR-020 to FR-026, PR-004 | Receives AA audio streams from OpenAuto, mixes them per AA audio focus rules, and routes the output to the BlueZ A2DP sink. |
 | Volume Sync     | Python (piauto/volume.py) | FR-025              | Polls BT AVRCP volume via BlueZ D-Bus (`org.bluez.MediaTransport1.Volume`) and syncs to PipeWire default sink via `wpctl set-volume`. Keeps physical speaker volume in sync with phone-side volume changes. |
 
 **Key design decisions:**
 
 - **Qt EGLFS over X11/Wayland:** Qt's EGLFS platform plugin renders directly to KMS/DRM without a compositor. This provides the compositorless rendering goal while remaining compatible with OpenAuto (which is a Qt application). Launched with `QT_QPA_PLATFORM=eglfs`. No X server needed.
+- **EGLFS window stacking constraint:** On Qt EGLFS, the first top-level window shown acquires "primary" status. A second window with `WindowStaysOnTopHint` cannot be raised above it with `raise()`. This means the AA video window (`VideoWidget`) cannot appear above `MainWindow` if `MainWindow` is shown first. The fix in `onStartPlayback()` is to hide `MainWindow` before showing `VideoWidget` at full-screen geometry.
 - **PipeWire over ALSA:** PipeWire natively handles concurrent stream mixing, Bluetooth audio routing (via WirePlumber + BlueZ integration), and dynamic sink switching. ALSA alone cannot mix streams or route to Bluetooth. PipeWire also supports the 16 kHz mono streams used by Guidance/System/Telephony without requiring manual resampling.
 - **Audio path:** OpenAuto (RtAudio backend) → PipeWire (pipewire-pulse compatibility layer) → BT A2DP speaker. OpenAuto runs as root but requires `XDG_RUNTIME_DIR=/run/user/1000` and `PULSE_SERVER=unix:/run/user/1000/pulse/native` environment variables to reach the `pi` user's PipeWire instance.
-- **Audio stutter fix:** The previous opencardev OpenAuto binary had a race condition in RtAudio — three audio stream instances (media 48 kHz stereo, guidance 16 kHz mono, system 16 kHz mono) could concurrently access shared RtAudio buffers without synchronization. The `AndrewGraydon/openauto` fork incorporates OpenDsh PR #32 which adds a `static std::mutex RtAudioOutput::mutex_` serializing all RtAudio operations. Pending build verification on Pi.
+- **Audio stutter fix:** The opencardev RtAudio backend had a race condition — three concurrent audio stream instances (media 48 kHz stereo, guidance 16 kHz mono, system 16 kHz mono) could access shared RtAudio buffers without synchronization. The `AndrewGraydon/openauto` fork incorporates OpenDsh PR #32 which adds a `static std::mutex RtAudioOutput::mutex_` serializing all RtAudio operations.
 - **Optional USB BT dongle (hci1):** The Pi 4B's BCM43455 shares a single radio for WiFi and BT, causing contention when WiFi AP and BT A2DP audio are active simultaneously. A USB BT adapter (e.g. CSR8510-based) on `hci1` can be dedicated to speaker audio, leaving the onboard `hci0` for BLE/RFCOMM discovery only. This eliminates audio dropouts caused by WiFi/BT radio contention.
 - **GStreamer video decode:** H.264 decoding is handled via GStreamer inside `GSTVideoOutput`. The pipeline prefers `v4l2h264dec` (Pi 4 hardware accelerated) with automatic fallback to `avdec_h264` (software). Qt retains DRM master throughout — GStreamer only decodes to RGB, delivering frames via `GstAppSink` callback. This avoids the DRM master conflict that direct V4L2/KMS paths would create.
+- **Video pipeline queue latency fix:** The default GStreamer queue between the decoder and sink holds up to 200 buffers, causing a visible decode backlog of 3–8 seconds when the phone screen is touched (the pipeline drains the queue before rendering the latest frame). The post-decoder queue is configured with `max-size-buffers=1, leaky=downstream` so it drops stale frames and always delivers the most recent one. The pre-decoder queue is capped at 2 buffers. This eliminates touch-to-screen latency.
 
 ### 4.5 Layer 5: Hardware Abstraction
 
@@ -202,13 +206,13 @@ graph TD
 | Component       | Technology          | Satisfies              | Description |
 | :-------------- | :------------------ | :--------------------- | :---------- |
 | GPIO Manager    | libgpiod / Python   | FR-032 to FR-035       | Monitors ignition sense (GPIO 17), drives fan PWM (GPIO 4). Uses libgpiod (not deprecated sysfs GPIO). |
-| Touch Input     | Qt (via EGLFS evdev integration) | FR-027 to FR-031 | Qt EGLFS reads USB HID touch events natively via its built-in evdev input plugin. OpenAuto receives touch events through Qt's event system and handles normalization and AA serialization internally. |
+| Touch Input     | Qt evdevtouch plugin (EGLFS) | FR-027 to FR-031 | Qt EGLFS reads USB HID touch events via the `evdevtouch` plugin. The `libinput` plugin is explicitly disabled (`QT_QPA_EGLFS_NO_LIBINPUT=1`) because libinput registers the touchscreen as both a pointer and touch device, causing double-tap events. The device is specified via `QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS` with `:grab` for exclusive kernel access. |
 | Thermal Monitor | sysfs               | FR-035                 | Reads `/sys/class/thermal/thermal_zone0/temp` and feeds temperature to the GPIO Manager for fan control. |
 
 **Key design decisions:**
 
 - **libgpiod over RPi.GPIO:** libgpiod is the modern, kernel-supported GPIO interface. RPi.GPIO uses deprecated sysfs and is no longer maintained for Pi 4/5.
-- **Touch input via Qt EGLFS:** Since OpenAuto is a Qt application running on EGLFS, touch input is handled natively by Qt's evdev input backend. No separate touch input process is needed — Qt reads `/dev/input/eventN` directly and delivers touch events to OpenAuto's widgets. OpenAuto handles coordinate normalization (0–10,000) and AA Protobuf serialization internally.
+- **evdevtouch over libinput:** Qt EGLFS auto-loads `libinput` by default, but the USB touchscreen (wch.cn USB2IIC_CTP_CONTROL) is registered by libinput as both a pointer device and a touch device, generating two events per physical tap (double-tap in OpenAuto). Setting `QT_QPA_EGLFS_NO_LIBINPUT=1` disables libinput; Qt falls back to the `evdevtouch` plugin. The device node is specified via `QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS` (pointing to `/dev/input/by-id/...`) with `:grab` to claim exclusive kernel access. This fix applies to both the splash screen and OpenAuto subprocess environments. OpenAuto also skips synthetic mouse events internally when `getTouchscreenEnabled()` is true.
 
 ---
 
@@ -219,9 +223,9 @@ graph TD
 ```
 Phone AA App
   │
-  ├──[WiFi 5GHz]──► hostapd ──► OpenAuto (TCP:5000, TLS, AAP)
-  │                                  │
-  │                                  ├──[Video Service]──► V4L2 HW Decode ──► Qt EGLFS ──► HDMI ──► Display
+  ├──[WiFi 5GHz]──► NM uap0 AP (192.168.50.1) ──► OpenAuto (TCP:5000, TLS, AAP)
+  │                                                     │
+  │                                                     ├──[Video Service]──► GStreamer (v4l2h264dec) ──► VideoWidget (QPainter) ──► Qt EGLFS ──► HDMI ──► Display (1024×600)
   │                                  │
   │                                  └──[Audio Services]──► PipeWire ──► BT A2DP ──► Speaker
   │                                        (Media 48kHz stereo)
@@ -277,9 +281,10 @@ The system runs the following long-lived processes:
 | Process          | User       | Description                                       |
 | :--------------- | :--------- | :------------------------------------------------ |
 | `piauto-main`    | root       | Python state machine and orchestrator. Manages BLE, WiFi, GPIO. |
-| `openauto`       | piauto     | AA head unit emulator. Started by piauto-main when phone is on AP. Handles entire AA session. Exits on disconnect. |
-| `hostapd`        | root       | Wi-Fi AP. Started/stopped by piauto-main.         |
-| `dnsmasq`        | dnsmasq    | DHCP. Started/stopped alongside hostapd.          |
+| `openauto`       | piauto     | AA head unit emulator. Binary at `/opt/openauto/bin/autoapp` (copied to `/usr/local/bin/autoapp`). Started by piauto-main when phone is on AP. Handles entire AA session. Exits on disconnect. |
+| `NetworkManager` | root       | Manages `uap0` AP (piauto-ap profile) and `wlan0` STA connections. Brought up at boot by `piauto-wifi.service`. Replaces hostapd+dnsmasq for the AP+STA configuration. |
+| `hostapd`        | root       | Wi-Fi AP in standalone (non-NM) mode only. Masked/disabled when NM manages the AP. |
+| `dnsmasq`        | dnsmasq    | DHCP in standalone (non-NM) mode only. Masked/disabled when NM manages the AP. |
 | `pipewire`       | pi         | Audio server. User service, requires `loginctl enable-linger pi`. |
 | `wireplumber`    | pi         | PipeWire session manager. User service, requires seat monitoring disabled and linger enabled. |
 | `bluetoothd`     | root       | BlueZ daemon. Started at boot via systemd.        |
@@ -391,3 +396,14 @@ To achieve the < 25 s boot-to-IDLE target (PR-001), the following optimizations 
 | libgstreamer1.0-dev | GStreamer core development headers |
 | libgstreamer-plugins-base1.0-dev | GStreamer base plugins (videoconvert, appsrc, appsink) |
 | libgstreamer-plugins-bad1.0-dev | GStreamer bad plugins (v4l2h264dec, h264parse) |
+
+### 9.3 Build and Install Paths
+
+| Artifact | Path |
+| :------- | :--- |
+| OpenAuto build directory | `/opt/openauto/build/` |
+| OpenAuto binary (post-build) | `/opt/openauto/bin/autoapp` |
+| OpenAuto shared library | `/opt/openauto/lib/libopenauto.so.2` |
+| Installed binary (production) | `/usr/local/bin/autoapp` |
+
+The `autoapp` binary loads `libopenauto.so.2` via RPATH from `/opt/openauto/lib/` (not `/usr/local/lib/`). After building, copy the binary manually: `cp /opt/openauto/bin/autoapp /usr/local/bin/autoapp`. Restart with `systemctl restart piauto`.

@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-IG-001                |
-| Version        | 1.0                          |
-| Date           | 2026-03-27                   |
+| Version        | 1.1                          |
+| Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
 ## 1. Introduction
@@ -65,10 +65,40 @@ The [OpenDsh](https://github.com/openDsh) project maintains actively-developed f
 1. **aasdk SSLWrapper.cpp** — Wrapped deprecated OpenSSL 1.x calls (`FIPS_mode_set`, `ENGINE_cleanup`, `ERR_load_BIO_strings`, etc.) in `#if (OPENSSL_VERSION_NUMBER < 0x30000000L)` guards. Commit `7f84303` on `AndrewGraydon/aasdk`.
 2. **openauto RtAudioOutput.cpp** — Changed `catch(const RtAudioError& e)` to `catch(const std::exception& e)` for RtAudio 6.x compatibility. Also incorporates OpenDsh PR #32 static mutex (`std::mutex RtAudioOutput::mutex_`) for audio stutter fix.
 3. **h264bitstream** — Built from source (`github.com/aizvorski/h264bitstream`) as it is not packaged in Debian 13.
-4. **openauto GSTVideoOutput.cpp / GSTVideoOutput.hpp** — Complete rewrite. Removed all QGlib/QGst dependencies. New implementation uses the plain GStreamer C API (`gst-1.0`). Pipeline: `appsrc → queue → h264parse → capssetter → <v4l2h264dec or avdec_h264> → videocrop → videoconvert → video/x-raw,format=RGB → appsink`. A new `VideoWidget` (QPainter-based `QWidget`) renders RGB frames delivered by `GstAppSink` via `onNewSample` callback. Qt retains DRM master throughout; GStreamer only decodes. Connected via `Qt::QueuedConnection` on `newFrame` signal for thread safety. Decoder selection is automatic: system attempts `v4l2h264dec` (Pi hardware), then `avdec_h264` (software fallback).
-5. **openauto CMakeLists.txt** — Removed `find_package(Qt5GStreamer)`, removed `Qt5::Quick`, `Qt5::Qml`, `Qt5::QuickWidgets`, and `${QTGSTREAMER_*}` link targets. Added `pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-sdp-1.0 gstreamer-video-1.0 gstreamer-app-1.0)`. Removed `QGst::init()` call from ServiceFactory.cpp (replaced with `gst_init(nullptr, nullptr)`).
+4. **openauto GSTVideoOutput.cpp / GSTVideoOutput.hpp** — Complete rewrite. Removed all QGlib/QGst dependencies. New implementation uses the plain GStreamer C API (`gst-1.0`). Full pipeline string:
+   ```
+   appsrc ! queue(max-size-buffers=2) ! h264parse ! capssetter(colorimetry=bt709) !
+   <v4l2h264dec or avdec_h264> ! queue(max-size-buffers=1, leaky=downstream) !
+   videocrop ! videoconvert ! video/x-raw,format=RGB ! appsink(sync=false, drop=true)
+   ```
+   A new `VideoWidget` (QPainter-based `QWidget`) renders RGB frames delivered by `GstAppSink` via `onNewSample` callback. A 30 FPS `QTimer` on the Qt main thread drives `VideoWidget` repaints — this decouples the GStreamer decode callback thread from the Qt event queue, preventing event loop stalls. Qt retains DRM master throughout; GStreamer only decodes. The `newFrame` signal is connected via `Qt::QueuedConnection` for thread safety between the GStreamer thread and Qt main thread. Decoder selection is automatic: system attempts `v4l2h264dec` (Pi hardware), then `avdec_h264` (software fallback).
 
-**Status:** Patches committed. Binary pending build verification on Pi (`/tmp/build_openauto.sh`).
+   **Queue latency fix:** The default GStreamer queue holds 200 buffers, causing 3–8 second touch-to-screen latency (the pipeline drains the backlog before rendering the current frame). The post-decoder queue uses `max-size-buffers=1, leaky=downstream` to drop stale frames and always surface the latest. The pre-decoder queue is capped at `max-size-buffers=2` to limit decoder input buffering.
+
+   **EGLFS window stacking fix:** `onStartPlayback()` hides `MainWindow` before showing `VideoWidget` at full-screen geometry. On Qt EGLFS, the first top-level window shown becomes "primary" and a second window with `WindowStaysOnTopHint` cannot be raised above it via `raise()`. Hiding `MainWindow` first avoids this constraint.
+5. **openauto CMakeLists.txt** — Removed `find_package(Qt5GStreamer)`, removed `Qt5::Quick`, `Qt5::Qml`, `Qt5::QuickWidgets`, and `${QTGSTREAMER_*}` link targets. Added `pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-sdp-1.0 gstreamer-video-1.0 gstreamer-app-1.0)`. Removed `QGst::init()` call from ServiceFactory.cpp (replaced with `gst_init(nullptr, nullptr)`). The `-DGST_BUILD=ON` cmake flag (note: `ON` not `TRUE`) enables this path.
+
+### 2.5 Build and Install Paths
+
+After building, the artifacts are:
+
+| Artifact | Path |
+| :------- | :--- |
+| OpenAuto source | `/opt/openauto/` |
+| Build directory | `/opt/openauto/build/` |
+| Binary (post-build) | `/opt/openauto/bin/autoapp` |
+| Shared library | `/opt/openauto/lib/libopenauto.so.2` |
+| Installed binary (production) | `/usr/local/bin/autoapp` |
+
+The RPATH embedded in `autoapp` points to `/opt/openauto/lib/`, so `libopenauto.so.2` is found there at runtime. After each build, copy the binary to the production path and restart the service:
+
+```bash
+cmake -S /opt/openauto -B /opt/openauto/build \
+    -DCMAKE_BUILD_TYPE=Release -DGST_BUILD=ON \
+    && cmake --build /opt/openauto/build -j2
+cp /opt/openauto/bin/autoapp /usr/local/bin/autoapp
+systemctl restart piauto
+```
 
 ---
 

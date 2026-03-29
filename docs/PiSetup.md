@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-PSG-001               |
-| Version        | 1.0                          |
-| Date           | 2026-03-27                   |
+| Version        | 1.1                          |
+| Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
 ## 1. Prerequisites
@@ -150,24 +150,39 @@ sudo ldconfig
 Use the `AndrewGraydon/openauto` fork on branch `piauto-debian13`. This includes the GSTVideoOutput rewrite, RtAudio 6.x fix, RtAudio mutex (audio stutter fix), and removal of qt-gstreamer dependency.
 
 ```bash
-cd /tmp
-git clone -b piauto-debian13 https://github.com/AndrewGraydon/openauto.git
-cd openauto
+# Clone to /opt/openauto so RPATH is correct
+sudo git clone -b piauto-debian13 https://github.com/AndrewGraydon/openauto.git /opt/openauto
 
-mkdir build && cd build
-sudo cmake -DCMAKE_BUILD_TYPE=Release \
-    -DGST_BUILD=TRUE \
-    -DNOPI=ON \
-    ..
-sudo make -j3
-sudo make install
+# Configure (note: -DGST_BUILD=ON not TRUE)
+cmake -S /opt/openauto -B /opt/openauto/build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DGST_BUILD=ON \
+    -DNOPI=ON
+
+# Build (-j2 avoids thermal throttle on Pi 4; use -j3 if cooled)
+cmake --build /opt/openauto/build -j2
+
+# Install binary to production path
+sudo cp /opt/openauto/bin/autoapp /usr/local/bin/autoapp
 ```
 
-> **Note:** `-DGST_BUILD=TRUE` enables the GStreamer video path (required for correct H.264 rendering on EGLFS). The `GSTVideoOutput` implementation in this fork uses the plain GStreamer C API — no qt-gstreamer dependency. Do NOT use `-DGST_BUILD=FALSE` as this falls back to `QtVideoOutput` (QMediaPlayer + QVideoWidget) which cannot render raw H.264 NAL units on EGLFS.
+> **Note:** `-DGST_BUILD=ON` enables the GStreamer video path (required for correct H.264 rendering on EGLFS). The `GSTVideoOutput` implementation in this fork uses the plain GStreamer C API — no qt-gstreamer dependency. Do NOT omit this flag as it falls back to `QtVideoOutput` (QMediaPlayer + QVideoWidget) which cannot render raw H.264 NAL units on EGLFS.
 
-> **Note:** `-DNOPI=ON` disables the Broadcom OMX/VideoCore (`bcm_host.h`) path. The resulting binary is `/usr/local/bin/autoapp`.
+> **Note:** `-DNOPI=ON` disables the Broadcom OMX/VideoCore (`bcm_host.h`) path.
+
+> **Note:** The binary is built to `/opt/openauto/bin/autoapp` and the shared library to `/opt/openauto/lib/libopenauto.so.2`. The RPATH in the binary points to `/opt/openauto/lib/`, so `libopenauto.so.2` is found at runtime without needing `ldconfig` or copying the library elsewhere.
 
 > **Note:** The `opencardev` binary previously used is saved at `/usr/local/bin/autoapp-2026.03.28+git.4cc739b` as a rollback. See Implementation Guide §2.4 for full migration details.
+
+#### Rebuilding after source changes
+
+```bash
+cmake -S /opt/openauto -B /opt/openauto/build \
+    -DCMAKE_BUILD_TYPE=Release -DGST_BUILD=ON \
+    && cmake --build /opt/openauto/build -j2
+sudo cp /opt/openauto/bin/autoapp /usr/local/bin/autoapp
+sudo systemctl restart piauto
+```
 
 ### 4.3 Create OpenAuto Configuration
 
@@ -199,7 +214,7 @@ EnableTouchscreen=true
 EOF
 ```
 
-> Video Resolution=1 is 800x480 (the AA protocol maximum at 30 FPS). The display scales this to its native 1024x600.
+> Video Resolution=1 is 800x480 (the AA protocol maximum at 30 FPS). The display native resolution is 1024x600; Qt EGLFS renders the 800x480 frame and the display scales it.
 
 ### 4.4 Record Build Info
 
@@ -548,7 +563,7 @@ bluetooth:
 
 ## 11. WiFi AP+STA (Dual Interface)
 
-The Pi 4B's BCM43455 WiFi chip supports running AP and station mode simultaneously on the same radio. This allows the Pi to maintain a connection to a home/infrastructure WiFi network (for SSH and internet) while also hosting an AP for Android Auto phone connections.
+The Pi 4B's BCM43455 WiFi chip supports running AP and station mode simultaneously on the same radio. This allows the Pi to maintain a connection to a home/infrastructure WiFi network (for SSH and internet) while also hosting an AP for Android Auto phone connections. Both connections are managed by NetworkManager — hostapd and dnsmasq are not used in this configuration.
 
 ### 11.1 Hardware Verification
 
@@ -575,27 +590,69 @@ ACTION=="add", SUBSYSTEM=="ieee80211", KERNEL=="phy*", RUN+="/usr/sbin/iw phy %k
 EOF
 ```
 
+After creating this file, reload udev rules or reboot:
+
+```bash
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
 ### 11.3 Configure NetworkManager
 
-Create the AP connection profile:
+Create the AP connection profile for `uap0`. The deployed configuration uses SSID `PiAuto` and passphrase `piauto1234` on the 192.168.50.0/24 subnet:
 
 ```bash
 nmcli connection add type wifi ifname uap0 con-name piauto-ap \
   autoconnect yes \
   wifi.mode ap \
   wifi.band a \
-  wifi.channel 48 \
   wifi.ssid "PiAuto" \
   wifi-sec.key-mgmt wpa-psk \
-  wifi-sec.psk "your-ap-password" \
+  wifi-sec.psk "piauto1234" \
   ipv4.method shared \
   ipv4.addresses 192.168.50.1/24 \
   ipv6.method disabled
 ```
 
-> **Channel note:** The AP channel is overridden by the station's channel at runtime (both must match). Set it to your home router's channel for initial config, but the driver will auto-sync.
+> **Channel note:** The AP channel is determined at runtime by the station's channel (both must match because they share one radio). The `wifi.channel` setting in the NM profile is overridden by the driver.
 
-### 11.4 Disable WiFi Power Saving
+> **Password note:** Change `piauto1234` to a stronger passphrase before deployment. Update both this NM profile and `/data/piauto.yaml` (`wifi.password`) — the RFCOMM credential exchange sends the value from the YAML config to the phone.
+
+The `wlan0` STA connection is managed by the existing NM profile (e.g., `netplan-wlan0-Graydons5G` or whichever profile connected during initial setup).
+
+### 11.4 Create the Boot Service
+
+NetworkManager brings up connections on demand, but the AP+STA combination requires a retry loop to ensure both interfaces are active before PiAuto starts. Create `/etc/systemd/system/piauto-wifi.service`:
+
+```ini
+[Unit]
+Description=PiAuto WiFi AP+STA bringup
+Before=piauto.service
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c '\
+  for i in $(seq 1 30); do \
+    nmcli -t -f DEVICE,STATE dev | grep -q "uap0:connected" && \
+    nmcli -t -f DEVICE,STATE dev | grep -q "wlan0:connected" && break; \
+    sleep 1; \
+  done'
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable it:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable piauto-wifi.service
+```
+
+### 11.5 Disable WiFi Power Saving
 
 Prevent latency spikes and connection drops:
 
@@ -606,20 +663,31 @@ wifi.powersave = 2
 EOF
 ```
 
-### 11.5 Verification
+### 11.6 Verification
 
 After reboot, both interfaces should be active:
 
 ```bash
 nmcli device status
-# wlan0   wifi  connected  your-home-wifi
+# wlan0   wifi  connected  netplan-wlan0-Graydons5G  (or your STA profile)
 # uap0    wifi  connected  piauto-ap
 ```
 
-### 11.6 Known Limitations
+Check that the Pi has an IP on uap0:
+
+```bash
+ip addr show uap0 | grep "inet "
+# inet 192.168.50.1/24
+```
+
+### 11.7 PiAuto WifiManager Integration
+
+When `uap0` is present and the NM `piauto-ap` profile is connected, `piauto/wifi.py`'s `_check_nm_managed_ap()` returns `True` and the `WifiManager` skips starting hostapd and dnsmasq. The AP is already up before PiAuto starts (via `piauto-wifi.service`). PiAuto only needs to verify connectivity before sending RFCOMM credentials to the phone.
+
+### 11.8 Known Limitations
 
 - **Same channel constraint:** Both interfaces share one radio, so they must be on the same channel. The AP follows the STA channel automatically.
-- **5 GHz required for both:** If your home WiFi is 5 GHz, the AP will also be 5 GHz (and vice versa for 2.4 GHz). Android phones support both.
+- **5 GHz required for both:** If your home WiFi is 5 GHz, the AP will also be 5 GHz (and vice versa for 2.4 GHz). Android phones support both bands.
 - **Firmware stability:** Under heavy concurrent traffic, the brcmfmac driver may occasionally crash. This is rare under normal PiAuto usage.
 - **Channel switching:** If the STA roams to a different channel, AP clients briefly disconnect during the channel switch.
 
@@ -674,20 +742,25 @@ Run these checks after setup to confirm everything is ready:
 | 6 | Display resolution | `cat /sys/class/drm/card0-HDMI-A-2/modes \| head -1` | 1024x600 |
 | 7 | /data mounted | `mount \| grep /data` | ext4, rw |
 | 8 | OpenAuto binary | `ls -la /usr/local/bin/autoapp` | exists |
-| 9 | hostapd available | `which hostapd` | /usr/sbin/hostapd |
-| 10 | dnsmasq available | `which dnsmasq` | /usr/sbin/dnsmasq |
-| 11 | GPIO accessible | `gpioinfo 4` | shows lines |
-| 12 | WiFi 5 GHz | `iw phy phy0 info \| grep 5180` | 5 GHz bands listed |
-| 13 | User linger | `loginctl show-user pi -p Linger` | Linger=yes |
-| 14 | WiFi AP+STA | `nmcli device status \| grep uap0` | connected (piauto-ap) |
-| 15 | WirePlumber bluez | `ls ~/.config/wireplumber/wireplumber.conf.d/50-bluez-config.conf` | exists |
-| 16 | WiFi power save | `cat /etc/NetworkManager/conf.d/wifi-powersave.conf` | wifi.powersave = 2 |
-| 17 | piauto service | `systemctl status piauto` | enabled |
-| 18 | Config file | `cat /data/piauto.yaml` | valid YAML |
-| 19 | GStreamer H.264 decoder | `gst-inspect-1.0 v4l2h264dec \|\| gst-inspect-1.0 avdec_h264` | at least one found |
-| 20 | GStreamer appsrc/appsink | `gst-inspect-1.0 appsrc && gst-inspect-1.0 appsink` | both found |
-| 21 | aasdk fork | `cat /tmp/aasdk/build/aasdk_version.txt 2>/dev/null \|\| git -C /tmp/aasdk rev-parse HEAD` | commit 7f84303 |
-| 22 | openauto fork | `git -C /tmp/openauto rev-parse HEAD` | commit ee75ebc or later |
+| 9 | OpenAuto library | `ls -la /opt/openauto/lib/libopenauto.so.2` | exists |
+| 10 | hostapd available | `which hostapd` | /usr/sbin/hostapd |
+| 11 | dnsmasq available | `which dnsmasq` | /usr/sbin/dnsmasq |
+| 12 | GPIO accessible | `gpioinfo 4` | shows lines |
+| 13 | WiFi 5 GHz | `iw phy phy0 info \| grep 5180` | 5 GHz bands listed |
+| 14 | User linger | `loginctl show-user pi -p Linger` | Linger=yes |
+| 15 | WiFi AP+STA | `nmcli device status \| grep uap0` | connected (piauto-ap) |
+| 16 | WiFi AP IP | `ip addr show uap0 \| grep "inet "` | 192.168.50.1/24 |
+| 17 | piauto-wifi service | `systemctl status piauto-wifi` | active (exited) |
+| 18 | WirePlumber bluez | `ls ~/.config/wireplumber/wireplumber.conf.d/50-bluez-config.conf` | exists |
+| 19 | WiFi power save | `cat /etc/NetworkManager/conf.d/wifi-powersave.conf` | wifi.powersave = 2 |
+| 20 | udev uap0 rule | `cat /etc/udev/rules.d/90-uap0.rules` | exists, references uap0 |
+| 21 | piauto service | `systemctl status piauto` | enabled |
+| 22 | Config file | `cat /data/piauto.yaml` | valid YAML |
+| 23 | GStreamer H.264 decoder | `gst-inspect-1.0 v4l2h264dec \|\| gst-inspect-1.0 avdec_h264` | at least one found |
+| 24 | GStreamer appsrc/appsink | `gst-inspect-1.0 appsrc && gst-inspect-1.0 appsink` | both found |
+| 25 | aasdk fork | `git -C /opt/aasdk rev-parse HEAD 2>/dev/null \|\| git -C /tmp/aasdk rev-parse HEAD` | commit 7f84303 |
+| 26 | openauto fork | `git -C /opt/openauto rev-parse HEAD` | commit ee75ebc or later |
+| 27 | libinput disabled | `grep QT_QPA_EGLFS_NO_LIBINPUT /etc/systemd/system/piauto.service 2>/dev/null \|\| echo "set in subprocess env"` | variable is set |
 
 ---
 
@@ -733,7 +806,8 @@ journalctl -t piauto -f
 | :------ | :----------- | :-- |
 | No splash screen | EGLFS can't acquire DRM | Check `/data/eglfs.json` device path. Ensure no other process holds DRM. |
 | BLE not advertising | BT soft-blocked or BlueZ not running | `rfkill unblock bluetooth && systemctl restart bluetooth`. Check `rfkill list`. |
-| Phone won't connect to WiFi | hostapd failed (bad channel/country) | Check `journalctl -u piauto` for hostapd errors. Verify `wifi.country` matches your region. |
+| Phone won't connect to PiAuto AP (AP+STA mode) | `uap0` not up or NM profile not connected | Run `nmcli device status`. If `uap0` is absent, check udev rule (`/etc/udev/rules.d/90-uap0.rules`). If `uap0` exists but is disconnected, run `nmcli connection up piauto-ap`. Check `systemctl status piauto-wifi`. |
+| Phone won't connect to WiFi (standalone mode) | hostapd failed (bad channel/country) | Check `journalctl -u piauto` for hostapd errors. Verify `wifi.country` matches your region. |
 | No audio from speaker | A2DP not connected | `bluetoothctl connect XX:XX:XX:XX:XX:XX`. Check `wpctl status`. |
 | `profile-unavailable` on BT connect | WirePlumber A2DP endpoints not registered | Check WirePlumber is running: `systemctl --user status wireplumber`. Ensure seat monitoring is disabled (§10.2) and linger is enabled (§8.3). |
 | BT speaker disconnects after SSH logout | User session killed, PipeWire/WirePlumber stopped | Enable linger: `sudo loginctl enable-linger pi` (§8.3). |
@@ -741,7 +815,10 @@ journalctl -t piauto -f
 | BT scan as root misses devices | BlueZ D-Bus policy differs for root | Run bt_pair as pi user: `sudo -u pi python3 -m piauto.bt_pair scan`. The service does this automatically. |
 | `br-connection-busy` on BT connect | Stale ACL connection from previous attempt | Disconnect first: `bluetoothctl disconnect XX:XX:XX:XX:XX:XX`, wait 3s, then retry. |
 | Boot timeout (60 s) | Service dependency not met | Check which service failed: `systemctl --failed`. |
-| OpenAuto crash | Missing libraries or DRM issue | Run `/usr/local/bin/autoapp` manually and check stderr. |
-| Audio stutter on notifications/Gemini | RtAudio race condition | Fixed in `AndrewGraydon/openauto` piauto-debian13 branch via OpenDsh PR #32 static mutex. Rebuild per §4.2 with `-DGST_BUILD=TRUE`. |
-| No video or wrong video size on EGLFS | Built without `-DGST_BUILD=TRUE`, using QtVideoOutput fallback | Rebuild per §4.2 with `-DGST_BUILD=TRUE`. Rollback: `sudo cp /usr/local/bin/autoapp-2026.03.28+git.4cc739b /usr/local/bin/autoapp`. |
+| OpenAuto crash / `libopenauto.so.2` not found | Library not at RPATH | Verify `/opt/openauto/lib/libopenauto.so.2` exists. The binary RPATH points there; do not move or rename the lib directory. |
+| OpenAuto crash / DRM issue | DRM access or missing plugins | Run `/usr/local/bin/autoapp` manually and check stderr. |
+| Video renders but touch has 3–8s lag | Post-decoder queue backlog | Rebuild with the current piauto-debian13 branch — the leaky post-decoder queue fix is required. |
+| Double tap on touchscreen | libinput double-registration | Ensure `QT_QPA_EGLFS_NO_LIBINPUT=1` and `QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS` are set in the OpenAuto subprocess environment (§17 of Implementation Guide). |
+| Audio stutter on notifications/Gemini | RtAudio race condition | Fixed in `AndrewGraydon/openauto` piauto-debian13 branch via OpenDsh PR #32 static mutex. Rebuild per §4.2 with `-DGST_BUILD=ON`. |
+| No video or wrong video size on EGLFS | Built without `-DGST_BUILD=ON` | Rebuild per §4.2 with `-DGST_BUILD=ON`. Rollback: `sudo cp /usr/local/bin/autoapp-2026.03.28+git.4cc739b /usr/local/bin/autoapp`. |
 | GStreamer pipeline fails to start | Missing gstreamer plugins | Run: `apt install gstreamer1.0-plugins-bad gstreamer1.0-libav`. Check: `gst-inspect-1.0 h264parse`. |

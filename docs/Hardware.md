@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-HW-001                |
-| Version        | 3.0                          |
-| Date           | 2026-03-27                   |
+| Version        | 3.1                          |
+| Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
 ## 1. Introduction
@@ -86,8 +86,8 @@ The buck converter's enable pin is held HIGH by a simple RC delay circuit (or a 
 | :----------------- | :--------------------------------------- |
 | Model              | LCDWiki 7-inch HDMI Display-B           |
 | Screen Size        | 7.0 inches (diagonal)                   |
-| Native Resolution  | 800 × 480                               |
-| Touch Type         | 5-point capacitive                       |
+| Native Resolution  | 1024 × 600 (confirmed via KMS EDID; marketed as 800×480 but reports 1024×600) |
+| Touch Type         | 5-point capacitive (wch.cn USB2IIC_CTP_CONTROL) |
 | Touch Interface    | USB (Micro-USB cable to Pi USB 2.0 port)|
 | Video Interface    | HDMI (Micro-HDMI to HDMI adapter/cable) |
 | Backlight          | 160 cd/m²                               |
@@ -98,25 +98,19 @@ The buck converter's enable pin is held HIGH by a simple RC delay circuit (or a 
 
 ### 4.2 Raspberry Pi Configuration (config.txt)
 
-The following lines shall be added to `/boot/config.txt`:
+With the KMS display driver (`dtoverlay=vc4-kms-v3d`, which is the default on RPi OS Trixie), **do not add legacy `hdmi_group`/`hdmi_mode`/`hdmi_cvt` settings** — they conflict with KMS and cause a blank screen. The KMS driver reads display capabilities via EDID and auto-configures to the native resolution (1024×600).
+
+Add only:
 
 ```ini
-# PiAuto Display Configuration — LCDWiki 7" HDMI-B
-hdmi_group=2
-hdmi_mode=87
-hdmi_cvt 800 480 60 6 0 0 0
-hdmi_drive=2
-
-# GPU memory for V4L2 decode + Qt EGLFS
+# GPU memory for V4L2 H.264 decode + Qt EGLFS
 gpu_mem=128
+
+# SD card overclock for faster boot (optional)
+dtparam=sd_overclock=100
 ```
 
-| Setting          | Value            | Purpose                                  |
-| :--------------- | :--------------- | :--------------------------------------- |
-| `hdmi_group`     | 2 (DMT)         | Use display monitor timings              |
-| `hdmi_mode`      | 87 (custom)      | Use custom mode defined by `hdmi_cvt`    |
-| `hdmi_cvt`       | 800 480 60 6 0 0 0 | 800×480 @ 60 Hz, 15:9 aspect, no margins |
-| `hdmi_drive`     | 2 (HDMI)        | Force HDMI mode (with audio capability)  |
+Qt EGLFS is configured via `/data/eglfs.json` (see PiSetup §12.1).
 
 ### 4.3 Connections
 

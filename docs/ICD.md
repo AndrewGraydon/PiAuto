@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-ICD-001               |
-| Version        | 3.0                          |
-| Date           | 2026-03-27                   |
+| Version        | 3.1                          |
+| Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
 ## 1. Introduction
@@ -209,20 +209,25 @@ The Pi 4B's BCM43455 WiFi chip supports concurrent AP and station mode on the sa
 
 | Interface | Role | Description |
 | :-------- | :--- | :---------- |
-| `wlan0` | Station | Connected to infrastructure WiFi (home network, for SSH/internet) |
-| `uap0` | Access Point | Virtual interface hosting the PiAuto AP for phone connections |
+| `wlan0` | Station | Connected to infrastructure WiFi (home network, for SSH/internet). NM profile: `netplan-wlan0-Graydons5G` (or equivalent). |
+| `uap0` | Access Point | Virtual interface created at boot by `/etc/udev/rules.d/90-uap0.rules`. Managed by NM profile `piauto-ap`. SSID: PiAuto, PSK: piauto1234. |
 
-Both interfaces share one radio and **must operate on the same channel**. The AP channel automatically follows the station's channel. The `uap0` interface is created at boot via a udev rule and managed by NetworkManager.
+Both interfaces share one radio and **must operate on the same channel**. The AP channel automatically follows the station's channel. Both connections are managed by NetworkManager and brought up by `piauto-wifi.service` before PiAuto starts.
 
-In standalone (production) mode without infrastructure WiFi, `wlan0` runs the AP directly.
+In standalone (production) mode without infrastructure WiFi, the Python `WifiManager` falls back to running hostapd on `wlan0` (192.168.1.1/24) with dnsmasq for DHCP.
 
-### 4.4 DHCP Configuration (dnsmasq)
+### 4.4 DHCP Configuration
+
+In AP+STA mode, DHCP for the `uap0` interface is provided by **NetworkManager** (the `piauto-ap` profile uses `ipv4.method shared`, which enables NM's built-in DHCP). In standalone mode, dnsmasq provides DHCP.
 
 | Parameter        | Value                                    |
 | :--------------- | :--------------------------------------- |
-| Interface        | uap0 (AP+STA mode) or wlan0 (standalone AP) |
-| Pi Static IP     | 192.168.50.1/24 (AP+STA) or 192.168.1.1/24 (standalone) |
-| DHCP Range       | 192.168.1.100 – 192.168.1.199           |
+| Interface (AP+STA) | uap0 (managed by NetworkManager DHCP)  |
+| Pi Static IP (AP+STA) | 192.168.50.1/24                   |
+| DHCP Range (AP+STA) | 192.168.50.100 – 192.168.50.199 (NM default for shared mode) |
+| Interface (standalone) | wlan0 (managed by dnsmasq)        |
+| Pi Static IP (standalone) | 192.168.1.1/24                  |
+| DHCP Range (standalone) | 192.168.1.100 – 192.168.1.199   |
 | Lease Time       | 1 hour                                   |
 | DNS              | Not provided (phone uses mobile data)    |
 
@@ -247,7 +252,7 @@ Once the phone joins the AP, it connects to the Pi on TCP port 5000. A TLS hands
 | Parameter        | Value                                    |
 | :--------------- | :--------------------------------------- |
 | Transport        | TCP                                      |
-| Bind Address     | 192.168.1.1                              |
+| Bind Address     | 192.168.50.1 (AP+STA mode) or 192.168.1.1 (standalone AP mode) |
 | Port             | 5000                                     |
 | TLS Version      | 1.2 minimum, 1.3 preferred              |
 | Certificate      | Self-signed, generated at first boot, stored in `/data/tls/` |
@@ -395,33 +400,43 @@ H.264 video arrives via the Media Sink service, is decoded by the Pi 4's hardwar
 | Parameter        | Value                                    |
 | :--------------- | :--------------------------------------- |
 | Codec            | H.264 Baseline Profile (the only required codec per HUIG) |
-| Resolution       | 800×480 (negotiated with phone during service discovery) |
+| AA Stream Resolution | 800×480 (negotiated with phone during service discovery) |
+| Display Resolution | 1024×600 (7" DSI/HDMI panel; Qt EGLFS renders at screen geometry) |
 | Frame Rate       | 30 FPS (maximum for 800×480 per HUIG)   |
 | Max Bitrate      | 4,000 kbps (per HUIG for 480p)           |
 | Decode API       | GStreamer pipeline (`v4l2h264dec` hardware-accelerated, `avdec_h264` software fallback) |
 | Render Target    | Qt EGLFS (KMS/DRM primary plane, HDMI) via `VideoWidget` (QPainter) |
 | Pixel Format     | RGB888 (GStreamer `videoconvert` output) → `QImage::Format_RGB888` → QPainter |
+| Paint Driver     | 30 FPS `QTimer` on Qt main thread; fires `VideoWidget::update()` independently of GStreamer decode thread |
 | Latency Budget   | ≤ 2 frames (≤ 66 ms at 30 FPS)           |
 
 **Note on codecs:** The AA protocol also defines VP9, H.265, and AV1 in newer versions, but H.264 Baseline Profile is the only **required** codec. Phones will always support it.
 
-**Note on resolution:** At 800×480, the HUIG specifies a range of 5–30 FPS. 60 FPS is only available at 720p (1280×720) and above. Since our display is 800×480, 30 FPS is the maximum.
+**Note on resolution:** At 800×480, the HUIG specifies a range of 5–30 FPS. 60 FPS is only available at 720p (1280×720) and above. Since the AA stream is 800×480, 30 FPS is the maximum. The display panel is 1024×600 — the VideoWidget is set to full-screen geometry and the image is scaled to fill it.
+
+**Note on queue latency:** The post-decoder GStreamer queue uses `max-size-buffers=1, leaky=downstream` to drop stale frames and ensure the most recently decoded frame is always delivered. Without this, touching the phone screen while the pipeline has a backlog causes a 3–8 second video lag (the pipeline drains queued frames before reaching the current one).
 
 ### 7.3 Data Flow
 
 ```
 OpenAuto (Media Sink service — receives H.264 NAL units)
   → GSTVideoOutput::write() → GstAppSrc (push H.264 data into pipeline)
-  → GStreamer: queue → h264parse → capssetter (colorimetry=bt709)
+  → GStreamer: queue(max-size-buffers=2) → h264parse → capssetter(colorimetry=bt709)
   → GStreamer: v4l2h264dec (VideoCore VI HW) or avdec_h264 (software fallback)
+  → GStreamer: queue(max-size-buffers=1, leaky=downstream) [drops stale frames]
   → GStreamer: videocrop → videoconvert → video/x-raw,format=RGB
-  → GstAppSink::onNewSample() callback (pull decoded RGB frame)
+  → GstAppSink(sync=false, drop=true)::onNewSample() callback
   → QImage(Format_RGB888) → emit newFrame() signal [Qt::QueuedConnection]
-  → VideoWidget::updateFrame() → QPainter::drawImage() on next repaint
-  → Qt EGLFS KMS page flip → HDMI output → Display
+  → VideoWidget stores latest frame
+  → QTimer (30 FPS, Qt main thread) → VideoWidget::update() → QPainter::drawImage()
+  → Qt EGLFS KMS page flip → HDMI output → Display (1024×600)
 ```
 
-**Architecture note:** Qt retains DRM master throughout the session. GStreamer only decodes — it has no display sink and never touches KMS/DRM. This prevents the DRM master conflict that would occur if GStreamer used a KMS/Wayland sink. The `Qt::QueuedConnection` on the `newFrame` signal ensures decoded frame delivery is thread-safe between the GStreamer callback thread and the Qt main thread.
+**Architecture notes:**
+- Qt retains DRM master throughout the session. GStreamer only decodes — it has no display sink and never touches KMS/DRM. This prevents the DRM master conflict that would occur if GStreamer used a KMS/Wayland sink.
+- The `Qt::QueuedConnection` on the `newFrame` signal ensures decoded frame delivery is thread-safe between the GStreamer callback thread and the Qt main thread.
+- The `QTimer` paint loop runs at 30 FPS on the Qt main thread, decoupled from the GStreamer decode thread. This prevents GStreamer callbacks from blocking the Qt event queue.
+- `onStartPlayback()` hides `MainWindow` before showing `VideoWidget` at full-screen geometry, working around the Qt EGLFS "primary window" constraint (see Architecture §4.4).
 
 ---
 
@@ -627,17 +642,14 @@ OpenAuto is launched by the state machine with the following configuration:
 ```bash
 QT_QPA_PLATFORM=eglfs \
 QT_QPA_EGLFS_KMS_CONFIG=/data/eglfs.json \
-openauto \
-  --resolution=800x480 \
-  --fps=30 \
-  --audio-output=pipewire \
-  --listen-address=192.168.1.1 \
-  --listen-port=5000 \
-  --tls-cert=/data/tls/cert.pem \
-  --tls-key=/data/tls/key.pem
+QT_QPA_EGLFS_NO_LIBINPUT=1 \
+QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS=/dev/input/by-id/usb-wch.cn_USB2IIC_CTP_CONTROL-event-if00:grab \
+XDG_RUNTIME_DIR=/run/user/1000 \
+PULSE_SERVER=unix:/run/user/1000/pulse/native \
+/usr/local/bin/autoapp
 ```
 
-Exact command-line arguments depend on the OpenAuto build configuration and may require adaptation.
+OpenAuto reads its configuration from `/data/openauto.ini` (resolution, FPS, audio backend, touchscreen enable). The TCP listen address is derived from the AP interface IP (192.168.50.1 in AP+STA mode, 192.168.1.1 in standalone). Exact command-line arguments may vary; the primary configuration is via `openauto.ini`.
 
 ### 13.4 OpenAuto Exit Codes
 

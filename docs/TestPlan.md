@@ -676,13 +676,13 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-008 | TCP Listen Port 5000              | T      | Pass    | 2026-03-28 | Verified via `ss -tlnH` during BT_PAIRING |
 | TC-009 | TLS + Version + Service Discovery | T      | Pass    | 2026-03-28 | AA projection fully operational |
 | TC-010 | Reconnection on Loss              | T      | Partial | 2026-03-28 | AA disconnect+reconnect works; WiFi toggle causes phone to rejoin house WiFi instead of AP |
-| TC-011 | H.264 Decode & Display            | D      | Pending |            | Requires re-run against AndrewGraydon/openauto binary (GSTVideoOutput rewrite) |
+| TC-011 | H.264 Decode & Display            | D      | Pass    | 2026-03-29 | GSTVideoOutput rewrite working — full screen, Maps + Spotify rendering correctly |
 | TC-012 | PipeWire Audio Path               | T      | Pass    | 2026-03-28 | Audio through PipeWire → BT A2DP speaker |
 | TC-013 | Four Audio Streams                | D+I    | Pending |            |       |
 | TC-014 | Audio Focus / Ducking             | D      | Pass    | 2026-03-28 | Nav voice ducks music, music resumes after |
 | TC-015 | BT A2DP Audio Output              | D      | Pass    | 2026-03-28 | Audio on BT speaker, not HDMI |
 | TC-016 | BT Audio Auto-Reconnect           | T      | Pending |            |       |
-| TC-017 | Touch Event Path                  | T      | Pass    | 2026-03-28 | Single-tap working after libinput fix |
+| TC-017 | Touch Event Path                  | T      | Pass    | 2026-03-29 | Touch-to-screen latency < 1s after GStreamer queue fix (was 3-8s) |
 | TC-018 | Multi-Touch                       | T      | Fail    | 2026-03-28 | HW supports 6-point MT; OpenAuto sends single-touch only (upstream limit) |
 | TC-019 | Ignition Sense Detection          | M      | Blocked |            | GPIO 17 not wired yet |
 | TC-020 | Clean Shutdown                    | M      | Blocked |            | Requires ignition GPIO |
@@ -711,14 +711,14 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-043 | Single-Tap (No Double-Tap)        | T      | Pass    | 2026-03-28 | libinput disabled, evdevtouch:grab |
 | TC-044 | USB BT Dongle for Speaker         | T      | Pass    | 2026-03-28 | hci1 USB, no stuttering |
 | TC-045 | AP+STA Dual Interface             | T      | Pass    | 2026-03-28 | uap0 AP (192.168.50.1) + wlan0 STA (10.10.0.190) simultaneous |
-| TC-046 | aasdk Build (OpenSSL 3.x)         | I      | Pending |            | Pending Pi build |
-| TC-047 | openauto Build (GSTVideoOutput)   | I      | Pending |            | Pending Pi build |
-| TC-048 | GStreamer Pipeline Init           | T      | Pending |            | Pending Pi build |
-| TC-049 | Audio Stutter Regression          | D      | Pending |            | Pending Pi build; verifies KI-001 fix |
-| TC-050 | HW H.264 Decoder (v4l2h264dec)    | T      | Pending |            | Pending Pi build |
-| TC-051 | VideoWidget Frame Rendering       | D      | Pending |            | Pending Pi build; verifies KI-002 fix |
-| TC-052 | Full Projection — New Binary E2E  | D      | Pending |            | Pending Pi build |
-| TC-053 | Software Fallback Decoder         | T      | Pending |            | Pending Pi build |
+| TC-046 | aasdk Build (OpenSSL 3.x)         | I      | Pass    | 2026-03-29 | Built clean on Debian 13 against OpenSSL 3.x |
+| TC-047 | openauto Build (GSTVideoOutput)   | I      | Pass    | 2026-03-29 | Built with -DGST_BUILD=TRUE; GStreamer linked |
+| TC-048 | GStreamer Pipeline Init           | T      | Pass    | 2026-03-29 | VideoService start + start indication logged; no pipeline errors |
+| TC-049 | Audio Stutter Regression          | D      | Pending |            | Play music + trigger Gemini/Assistant repeatedly |
+| TC-050 | HW H.264 Decoder (v4l2h264dec)    | T      | Pending |            | Check autoapp logs for decoder selection |
+| TC-051 | VideoWidget Frame Rendering       | D      | Pass    | 2026-03-29 | Full screen Maps + Spotify rendering correctly at 1024x600 |
+| TC-052 | Full Projection — New Binary E2E  | D      | Pass    | 2026-03-29 | Video, audio, touch all working; touch latency < 1s confirmed |
+| TC-053 | Software Fallback Decoder         | T      | Pending |            | Optional — defer |
 
 ---
 
@@ -727,6 +727,6 @@ This document defines the verification approach for every requirement in PiAuto-
 | ID | Summary | Severity | Root Cause | Status |
 | :- | :------ | :------- | :--------- | :----- |
 | KI-001 | Audio stutter when notifications or Gemini trigger during music playback | Medium | RtAudio race condition — three audio stream instances (media, guidance, system) concurrently access shared RtAudio buffers without synchronization. | Pending build verification — `AndrewGraydon/openauto` piauto-debian13 branch incorporates OpenDsh PR #32 static mutex fix. Verify with TC-049 after Pi build. |
-| KI-002 | Video sizing and touch input broken with QtVideoOutput path on EGLFS | High | `QtVideoOutput` (QMediaPlayer + QVideoWidget) cannot render raw H.264 NAL units on EGLFS. | Pending build verification — `GSTVideoOutput` fully rewritten to use plain GStreamer C API in `AndrewGraydon/openauto`. Verify with TC-011 and TC-052 after Pi build. |
+| KI-002 | Video sizing and touch input broken with QtVideoOutput path on EGLFS | High | `QtVideoOutput` (QMediaPlayer + QVideoWidget) cannot render raw H.264 NAL units on EGLFS. | **Closed 2026-03-29** — `GSTVideoOutput` rewrite verified working. Full screen video rendering confirmed (TC-011, TC-051, TC-052). |
 | KI-003 | Phone occasionally reconnects to house WiFi instead of PiAuto AP | Low | After WiFi toggle or extended idle, phone's WiFi auto-join prioritizes known networks over PiAuto AP. Usually resolves after BT disconnect/reconnect cycle triggers fresh credential exchange. | Intermittent — workaround is BT reconnect cycle. |
 | KI-004 | Connection setup time slightly exceeds 15s target | Low | PhoneDetected → PROJECTION_ACTIVE measured at 16s. WiFi join adds ~4s delay when phone must switch from house WiFi to PiAuto AP. | TC-030 partial pass. |
