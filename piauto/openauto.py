@@ -134,15 +134,9 @@ class OpenAutoManager:
                 "QT_QPA_EGLFS_KMS_CONFIG", "/data/eglfs.json"
             ),
             "QT_QPA_EGLFS_HIDECURSOR": "1",
-            # Disable libinput — it opens the touchscreen as both pointer
-            # and touch device, causing double-tap behaviour.  We use the
-            # explicit evdevtouch plugin instead.
-            "QT_QPA_EGLFS_NO_LIBINPUT": "1",
-            "QT_QPA_GENERIC_PLUGINS": "evdevtouch",
-            "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS": os.environ.get(
-                "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS",
-                detect_touchscreen_device() + ":grab",
-            ),
+            # Use libinput for input handling. libinput also synthesizes a
+            # QMouseEvent for each touch, but InputDevice skips those when
+            # a touchscreen is configured, so no double-tap occurs.
             # PipeWire/PulseAudio runs as user pi (uid 1000) — autoapp
             # runs as root but needs access to the PipeWire PulseAudio socket
             "XDG_RUNTIME_DIR": "/run/user/1000",

@@ -141,12 +141,6 @@ class SplashManager:
                 "QT_QPA_EGLFS_KMS_CONFIG", "/data/eglfs.json"
             ),
             "QT_QPA_EGLFS_HIDECURSOR": "1",
-            "QT_QPA_EGLFS_NO_LIBINPUT": "1",
-            "QT_QPA_GENERIC_PLUGINS": "evdevtouch",
-            "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS": os.environ.get(
-                "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS",
-                detect_touchscreen_device() + ":grab",
-            ),
         }
 
     async def _ensure_running(self) -> None:
