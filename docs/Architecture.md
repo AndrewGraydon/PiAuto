@@ -151,7 +151,7 @@ graph TD
 
 | Component       | Technology          | Satisfies              | Description |
 | :-------------- | :------------------ | :--------------------- | :---------- |
-| OpenAuto        | C++ (aasdk + Qt5)   | FR-011 to FR-031, FR-038, FR-039 | Complete AA head unit emulator. Handles TCP server, TLS, version negotiation, service discovery, video decode dispatch, audio stream handling, touch input forwarding, and sensor reporting. |
+| OpenAuto        | C++ (aasdk + Qt5 + GStreamer) | FR-011 to FR-031, FR-038, FR-039 | Complete AA head unit emulator. Handles TCP server, TLS, version negotiation, service discovery, video decode dispatch (via GSTVideoOutput + GStreamer pipeline), audio stream handling, touch input forwarding, and sensor reporting. Source: `AndrewGraydon/openauto`, branch `piauto-debian13`. |
 
 **What OpenAuto handles internally (the Python orchestrator does NOT):**
 
@@ -182,7 +182,7 @@ graph TD
 | Component       | Technology          | Satisfies              | Description |
 | :-------------- | :------------------ | :--------------------- | :---------- |
 | Qt 5 EGLFS      | Qt 5.15, EGLFS plugin | FR-017, FR-036, FR-037 | Direct KMS/DRM rendering without X11 or Wayland. Qt's EGLFS plugin renders OpenAuto's UI directly to the HDMI framebuffer. Also used by the splash screen — a single long-lived Qt process with `QStackedWidget` that switches views (idle, BT setup) via stdin commands without releasing DRM master. |
-| V4L2 Decoder    | Linux V4L2 API      | FR-016, PR-003         | Hardware H.264 Baseline Profile decoding on the Pi 4's VideoCore VI. OpenAuto feeds NAL units to V4L2 and receives decoded frames for rendering. |
+| V4L2 Decoder    | GStreamer (v4l2h264dec) | FR-016, PR-003      | Hardware H.264 Baseline Profile decoding on the Pi 4's VideoCore VI, accessed via the GStreamer `v4l2h264dec` element inside the `GSTVideoOutput` pipeline. Falls back to software decode (`avdec_h264`) if V4L2 is unavailable. Decoded RGB frames are delivered via `GstAppSink` and rendered by `VideoWidget` (QPainter). |
 | PipeWire        | PipeWire 0.3+       | FR-020 to FR-026, PR-004 | Receives AA audio streams from OpenAuto, mixes them per AA audio focus rules, and routes the output to the BlueZ A2DP sink. |
 | Volume Sync     | Python (piauto/volume.py) | FR-025              | Polls BT AVRCP volume via BlueZ D-Bus (`org.bluez.MediaTransport1.Volume`) and syncs to PipeWire default sink via `wpctl set-volume`. Keeps physical speaker volume in sync with phone-side volume changes. |
 
@@ -191,9 +191,9 @@ graph TD
 - **Qt EGLFS over X11/Wayland:** Qt's EGLFS platform plugin renders directly to KMS/DRM without a compositor. This provides the compositorless rendering goal while remaining compatible with OpenAuto (which is a Qt application). Launched with `QT_QPA_PLATFORM=eglfs`. No X server needed.
 - **PipeWire over ALSA:** PipeWire natively handles concurrent stream mixing, Bluetooth audio routing (via WirePlumber + BlueZ integration), and dynamic sink switching. ALSA alone cannot mix streams or route to Bluetooth. PipeWire also supports the 16 kHz mono streams used by Guidance/System/Telephony without requiring manual resampling.
 - **Audio path:** OpenAuto (RtAudio backend) → PipeWire (pipewire-pulse compatibility layer) → BT A2DP speaker. OpenAuto runs as root but requires `XDG_RUNTIME_DIR=/run/user/1000` and `PULSE_SERVER=unix:/run/user/1000/pulse/native` environment variables to reach the `pi` user's PipeWire instance.
-- **Known audio stutter:** The current opencardev OpenAuto binary has a race condition in RtAudio — three audio stream instances (media 48 kHz stereo, guidance 16 kHz mono, system 16 kHz mono) can concurrently access shared RtAudio buffers without synchronization. This causes audible stuttering when notifications or voice assistant (Gemini) trigger concurrent streams. The OpenDsh fork (PR #32, Oct 2024) fixes this with a static mutex. See Implementation Guide §2.4 for migration status.
+- **Audio stutter fix:** The previous opencardev OpenAuto binary had a race condition in RtAudio — three audio stream instances (media 48 kHz stereo, guidance 16 kHz mono, system 16 kHz mono) could concurrently access shared RtAudio buffers without synchronization. The `AndrewGraydon/openauto` fork incorporates OpenDsh PR #32 which adds a `static std::mutex RtAudioOutput::mutex_` serializing all RtAudio operations. Pending build verification on Pi.
 - **Optional USB BT dongle (hci1):** The Pi 4B's BCM43455 shares a single radio for WiFi and BT, causing contention when WiFi AP and BT A2DP audio are active simultaneously. A USB BT adapter (e.g. CSR8510-based) on `hci1` can be dedicated to speaker audio, leaving the onboard `hci0` for BLE/RFCOMM discovery only. This eliminates audio dropouts caused by WiFi/BT radio contention.
-- **V4L2 hardware decode** is the standard approach for H.264 on Pi 4. OpenAuto/aasdk supports V4L2 M2M as a decode backend. Zero-copy paths (dmabuf) from decode to display are possible via DRM PRIME.
+- **GStreamer video decode:** H.264 decoding is handled via GStreamer inside `GSTVideoOutput`. The pipeline prefers `v4l2h264dec` (Pi 4 hardware accelerated) with automatic fallback to `avdec_h264` (software). Qt retains DRM master throughout — GStreamer only decodes to RGB, delivering frames via `GstAppSink` callback. This avoids the DRM master conflict that direct V4L2/KMS paths would create.
 
 ### 4.5 Layer 5: Hardware Abstraction
 
@@ -347,7 +347,7 @@ To achieve the < 25 s boot-to-IDLE target (PR-001), the following optimizations 
 | :---------------------- | :---------------- | :----------------- | :-------- |
 | AA Protocol Handler     | OpenAuto + aasdk  | aa-proxy-rs        | aa-proxy-rs is a wired-to-wireless proxy dongle, not a head unit emulator. OpenAuto is a proven head unit emulator (used by Crankshaft, 2.6k stars). |
 | AA Protocol Handler     | OpenAuto + aasdk  | AACS               | AACS is less proven and has a smaller community. aasdk implements the full AA protocol. |
-| OpenAuto source         | opencardev (current) | OpenDsh fork    | OpenDsh has RtAudio mutex fix but requires GSTVideoOutput rewrite (qt-gstreamer removed from Debian 13). Migration in progress — see Implementation §2.4. |
+| OpenAuto source         | AndrewGraydon/openauto fork (piauto-debian13) | opencardev, OpenDsh | AndrewGraydon fork adds RtAudio mutex fix (from OpenDsh PR #32) + complete GSTVideoOutput rewrite (plain GStreamer C API, no qt-gstreamer). Pending Pi build verification. See Implementation §2.4. |
 | Display Framework       | Qt 5 EGLFS        | Raw KMS/DRM, X11   | Qt EGLFS gives compositorless rendering (like raw KMS) while being compatible with OpenAuto (a Qt app). No X server or Wayland needed. |
 | Audio Subsystem         | PipeWire          | ALSA, PulseAudio   | Native stream mixing (4 concurrent AA streams at different sample rates), BT A2DP routing, low latency. PulseAudio would also work but PipeWire is its modern replacement. |
 | BT Discovery            | BLE (via BlueZ)   | Classic BR/EDR     | WAA protocol requires BLE for initial discovery per the HUIG. Classic BT is only used for A2DP audio. |
@@ -388,3 +388,6 @@ To achieve the < 25 s boot-to-IDLE target (PR-001), the following optimizations 
 | libssl-dev       | TLS support                         |
 | libboost-all-dev | aasdk dependency                    |
 | qtmultimedia5-dev| Qt multimedia (video/audio)         |
+| libgstreamer1.0-dev | GStreamer core development headers |
+| libgstreamer-plugins-base1.0-dev | GStreamer base plugins (videoconvert, appsrc, appsink) |
+| libgstreamer-plugins-bad1.0-dev | GStreamer bad plugins (v4l2h264dec, h264parse) |

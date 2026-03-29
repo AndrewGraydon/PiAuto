@@ -116,7 +116,7 @@ This document traces every requirement in PiAuto-SRS-001 forward to the architec
 | hostapd                  | FR-006–009                              | Yes       |
 | dnsmasq                  | FR-010                                  | Yes       |
 | OpenAuto (aasdk)         | FR-011–014, FR-019, FR-021–024, FR-028–030, FR-038, FR-039 | Yes |
-| V4L2 Decoder             | FR-016, PR-003                          | Yes       |
+| GStreamer Decoder (v4l2h264dec/avdec_h264) | FR-016, PR-003             | Yes       |
 | Qt 5 EGLFS               | FR-017, FR-036, FR-037                 | Yes       |
 | PipeWire + WirePlumber   | FR-020, FR-025, FR-026, FR-040, FR-041, PR-004 | Yes |
 | Touch Input (Qt evdev)   | FR-027, FR-031                          | Yes       |

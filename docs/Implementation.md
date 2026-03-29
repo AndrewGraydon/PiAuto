@@ -41,10 +41,10 @@ The upstream OpenAuto (`bluewave-studio/openauto`) was originally designed for *
 
 ### 2.3 Pinned Versions
 
-| Component | Repository | Commit/Tag |
-| :-------- | :--------- | :--------- |
-| aasdk     | `opencardev/aasdk` | Pin to latest stable tag at build time. Document the exact commit in the build script. |
-| OpenAuto  | `opencardev/openauto` or custom fork | Same — pin at build time. |
+| Component | Repository | Branch | Notes |
+| :-------- | :--------- | :----- | :---- |
+| aasdk     | `AndrewGraydon/aasdk` | `piauto-debian13` | Fork of OpenDsh/aasdk with OpenSSL 3.x compatibility patch. Commit `7f84303`. |
+| OpenAuto  | `AndrewGraydon/openauto` | `piauto-debian13` | Fork of OpenDsh/openauto with GSTVideoOutput rewrite, RtAudio 6.x fix, and QGst removal. Commits `13bae52`, `ee75ebc`. |
 
 **Build script must record:** `git rev-parse HEAD` for both repos, stored in `/data/build-info.txt`.
 
@@ -58,18 +58,17 @@ The [OpenDsh](https://github.com/openDsh) project maintains actively-developed f
 | RtAudio thread safety | No mutex — concurrent buffer access causes stutter | PR #32 adds static mutex serializing RtAudio calls |
 | OpenSSL 3.x support | No (uses deprecated OpenSSL 1.x APIs) | No (same issue) |
 | RtAudio 6.x support | No (`RtAudioError` class removed in v6) | No (same issue) |
-| Qt5GStreamer dependency | Uses QGlib for GStreamer video output | Same — requires qt-gstreamer |
+| Qt5GStreamer dependency | Uses QGlib for GStreamer video output | Same — requires qt-gstreamer | **Resolved** — rewritten to plain GStreamer C API (see patches below) |
 
-**Build attempt on Debian 13 (Trixie):** The OpenDsh aasdk and openauto were successfully compiled on the Pi with the following patches:
+**Build patches applied (all committed to `AndrewGraydon/aasdk` and `AndrewGraydon/openauto` branch `piauto-debian13`):**
 
-1. **aasdk SSLWrapper.cpp** — Wrapped deprecated OpenSSL 1.x calls (`FIPS_mode_set`, `ENGINE_cleanup`, `ERR_load_BIO_strings`, etc.) in `#if (OPENSSL_VERSION_NUMBER < 0x30000000L)` guards.
-2. **openauto RtAudioOutput.cpp** — Changed `catch(const RtAudioError& e)` to `catch(const std::exception& e)` for RtAudio 6.x compatibility.
+1. **aasdk SSLWrapper.cpp** — Wrapped deprecated OpenSSL 1.x calls (`FIPS_mode_set`, `ENGINE_cleanup`, `ERR_load_BIO_strings`, etc.) in `#if (OPENSSL_VERSION_NUMBER < 0x30000000L)` guards. Commit `7f84303` on `AndrewGraydon/aasdk`.
+2. **openauto RtAudioOutput.cpp** — Changed `catch(const RtAudioError& e)` to `catch(const std::exception& e)` for RtAudio 6.x compatibility. Also incorporates OpenDsh PR #32 static mutex (`std::mutex RtAudioOutput::mutex_`) for audio stutter fix.
 3. **h264bitstream** — Built from source (`github.com/aizvorski/h264bitstream`) as it is not packaged in Debian 13.
-4. **CMake flag `-DGST_BUILD=FALSE`** — qt-gstreamer (QGlib) was removed from Debian 13. This forces the `QtVideoOutput` path (QMediaPlayer + QVideoWidget) instead of `GSTVideoOutput`.
+4. **openauto GSTVideoOutput.cpp / GSTVideoOutput.hpp** — Complete rewrite. Removed all QGlib/QGst dependencies. New implementation uses the plain GStreamer C API (`gst-1.0`). Pipeline: `appsrc → queue → h264parse → capssetter → <v4l2h264dec or avdec_h264> → videocrop → videoconvert → video/x-raw,format=RGB → appsink`. A new `VideoWidget` (QPainter-based `QWidget`) renders RGB frames delivered by `GstAppSink` via `onNewSample` callback. Qt retains DRM master throughout; GStreamer only decodes. Connected via `Qt::QueuedConnection` on `newFrame` signal for thread safety. Decoder selection is automatic: system attempts `v4l2h264dec` (Pi hardware), then `avdec_h264` (software fallback).
+5. **openauto CMakeLists.txt** — Removed `find_package(Qt5GStreamer)`, removed `Qt5::Quick`, `Qt5::Qml`, `Qt5::QuickWidgets`, and `${QTGSTREAMER_*}` link targets. Added `pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-sdp-1.0 gstreamer-video-1.0 gstreamer-app-1.0)`. Removed `QGst::init()` call from ServiceFactory.cpp (replaced with `gst_init(nullptr, nullptr)`).
 
-**Result:** The binary compiled and ran, but the `QtVideoOutput` video path does not properly render raw H.264 NAL units on EGLFS. Video sizing is incorrect and touch input is lost. The `GSTVideoOutput` path (which uses a proper `appsrc → h264parse → decode → display` GStreamer pipeline) is required but depends on qt-gstreamer.
-
-**Next step:** Rewrite `GSTVideoOutput.cpp` to use the plain GStreamer C API (`gst-1.0`) instead of QGlib bindings, enabling the direct GStreamer pipeline without the removed qt-gstreamer package. This would provide both the RtAudio mutex fix (audio stutter) and proper video rendering.
+**Status:** Patches committed. Binary pending build verification on Pi (`/tmp/build_openauto.sh`).
 
 ---
 

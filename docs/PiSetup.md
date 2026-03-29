@@ -107,8 +107,16 @@ sudo apt install -y \
     libqt5svg5-dev \
     librtaudio-dev \
     libtag-dev \
-    libgps-dev
+    libgps-dev \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-bad1.0-dev \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-libav
 ```
+
+> **Note:** The GStreamer dev packages are required for the `GSTVideoOutput` rewrite (see Implementation Guide §2.4 patch #4). These replace the removed qt-gstreamer (QGlib) dependency.
 
 ---
 
@@ -116,41 +124,50 @@ sudo apt install -y \
 
 ### 4.1 Build aasdk
 
-The upstream aasdk (opencardev/aasdk) already includes `TCPTransport` for wireless AA.
+Use the `AndrewGraydon/aasdk` fork on branch `piauto-debian13`. This includes the OpenSSL 3.x compatibility patch required for Debian 13 (Trixie).
 
 ```bash
-cd /opt
-sudo git clone https://github.com/opencardev/aasdk.git
+cd /tmp
+git clone -b piauto-debian13 https://github.com/AndrewGraydon/aasdk.git
 cd aasdk
 
-sudo mkdir build && cd build
+mkdir build && cd build
 sudo cmake -DCMAKE_BUILD_TYPE=Release \
     -DSKIP_BUILD_PROTOBUF=ON \
     -DSKIP_BUILD_ABSL=ON \
     ..
-sudo make -j$(nproc)
+sudo make -j3
 sudo make install
 sudo ldconfig
 ```
 
 > **Note:** `-DSKIP_BUILD_PROTOBUF=ON -DSKIP_BUILD_ABSL=ON` uses the system protobuf (3.21) instead of downloading protobuf v30 + abseil, which avoids build conflicts on Trixie.
 
+> **Note:** Use `-j3` on Pi 4 to avoid thermal throttling during the build. The `AndrewGraydon/aasdk` patch wraps deprecated OpenSSL 1.x calls in version guards so the build succeeds against OpenSSL 3.x on Debian 13.
+
 ### 4.2 Build OpenAuto
 
+Use the `AndrewGraydon/openauto` fork on branch `piauto-debian13`. This includes the GSTVideoOutput rewrite, RtAudio 6.x fix, RtAudio mutex (audio stutter fix), and removal of qt-gstreamer dependency.
+
 ```bash
-cd /opt
-sudo git clone https://github.com/opencardev/openauto.git
+cd /tmp
+git clone -b piauto-debian13 https://github.com/AndrewGraydon/openauto.git
 cd openauto
 
-sudo mkdir build && cd build
-sudo cmake -DCMAKE_BUILD_TYPE=Release -DNOPI=ON ..
-sudo make -j$(nproc)
+mkdir build && cd build
+sudo cmake -DCMAKE_BUILD_TYPE=Release \
+    -DGST_BUILD=TRUE \
+    -DNOPI=ON \
+    ..
+sudo make -j3
 sudo make install
 ```
 
-> **Note:** `-DNOPI=ON` disables the Broadcom OMX/VideoCore (`bcm_host.h`) video path which doesn't exist on Trixie. Video output uses Qt's GStreamer pipeline instead. The resulting binary is `/usr/local/bin/autoapp`.
+> **Note:** `-DGST_BUILD=TRUE` enables the GStreamer video path (required for correct H.264 rendering on EGLFS). The `GSTVideoOutput` implementation in this fork uses the plain GStreamer C API — no qt-gstreamer dependency. Do NOT use `-DGST_BUILD=FALSE` as this falls back to `QtVideoOutput` (QMediaPlayer + QVideoWidget) which cannot render raw H.264 NAL units on EGLFS.
 
-> **OpenDsh migration (in progress):** The `opencardev` binary has an RtAudio race condition causing audio stutter during concurrent streams (e.g., music + notifications). The [OpenDsh fork](https://github.com/openDsh/openauto) fixes this (PR #32), but building on Debian 13 requires patches for OpenSSL 3.x, RtAudio 6.x, h264bitstream, and a rewrite of `GSTVideoOutput.cpp` to use plain GStreamer C API (qt-gstreamer was removed from Debian 13). See Implementation Guide §2.4 for full details. The patched OpenDsh binary is saved on the Pi at `/usr/local/bin/autoapp-opendsh` for future work.
+> **Note:** `-DNOPI=ON` disables the Broadcom OMX/VideoCore (`bcm_host.h`) path. The resulting binary is `/usr/local/bin/autoapp`.
+
+> **Note:** The `opencardev` binary previously used is saved at `/usr/local/bin/autoapp-2026.03.28+git.4cc739b` as a rollback. See Implementation Guide §2.4 for full migration details.
 
 ### 4.3 Create OpenAuto Configuration
 
@@ -667,6 +684,10 @@ Run these checks after setup to confirm everything is ready:
 | 16 | WiFi power save | `cat /etc/NetworkManager/conf.d/wifi-powersave.conf` | wifi.powersave = 2 |
 | 17 | piauto service | `systemctl status piauto` | enabled |
 | 18 | Config file | `cat /data/piauto.yaml` | valid YAML |
+| 19 | GStreamer H.264 decoder | `gst-inspect-1.0 v4l2h264dec \|\| gst-inspect-1.0 avdec_h264` | at least one found |
+| 20 | GStreamer appsrc/appsink | `gst-inspect-1.0 appsrc && gst-inspect-1.0 appsink` | both found |
+| 21 | aasdk fork | `cat /tmp/aasdk/build/aasdk_version.txt 2>/dev/null \|\| git -C /tmp/aasdk rev-parse HEAD` | commit 7f84303 |
+| 22 | openauto fork | `git -C /tmp/openauto rev-parse HEAD` | commit ee75ebc or later |
 
 ---
 
@@ -721,5 +742,6 @@ journalctl -t piauto -f
 | `br-connection-busy` on BT connect | Stale ACL connection from previous attempt | Disconnect first: `bluetoothctl disconnect XX:XX:XX:XX:XX:XX`, wait 3s, then retry. |
 | Boot timeout (60 s) | Service dependency not met | Check which service failed: `systemctl --failed`. |
 | OpenAuto crash | Missing libraries or DRM issue | Run `/usr/local/bin/autoapp` manually and check stderr. |
-| Audio stutter on notifications/Gemini | RtAudio race condition in opencardev binary | Upstream fix in OpenDsh PR #32 (static mutex). Migration blocked on GSTVideoOutput rewrite — see §4.2. |
-| OpenDsh binary: no video/touch | QtVideoOutput can't render raw H.264 on EGLFS | Requires GSTVideoOutput path. Rollback to opencardev binary: `sudo cp /usr/local/bin/autoapp-2026.03.28+git.4cc739b /usr/local/bin/autoapp`. |
+| Audio stutter on notifications/Gemini | RtAudio race condition | Fixed in `AndrewGraydon/openauto` piauto-debian13 branch via OpenDsh PR #32 static mutex. Rebuild per §4.2 with `-DGST_BUILD=TRUE`. |
+| No video or wrong video size on EGLFS | Built without `-DGST_BUILD=TRUE`, using QtVideoOutput fallback | Rebuild per §4.2 with `-DGST_BUILD=TRUE`. Rollback: `sudo cp /usr/local/bin/autoapp-2026.03.28+git.4cc739b /usr/local/bin/autoapp`. |
+| GStreamer pipeline fails to start | Missing gstreamer plugins | Run: `apt install gstreamer1.0-plugins-bad gstreamer1.0-libav`. Check: `gst-inspect-1.0 h264parse`. |

@@ -578,7 +578,91 @@ This document defines the verification approach for every requirement in PiAuto-
 
 ---
 
-## 25. Test Execution Checklist
+## 25. Test Cases — AndrewGraydon/openauto Fork Verification
+
+### TC-046: aasdk Build with OpenSSL 3.x Patch
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | Implementation §2.4 (Patch #1)                          |
+| Method       | I                                                       |
+| Precondition | Pi running Debian 13 Trixie, `AndrewGraydon/aasdk` cloned |
+| Procedure    | 1. Build aasdk per PiSetup §4.1. 2. Verify `cmake` and `make` complete with exit code 0. 3. Verify `libaasdk.so` installed. 4. Run `ldd /usr/local/lib/libaasdk.so | grep ssl` — verify links to libssl.so.3. |
+| Pass Criteria| Build completes. Library installed. Links against OpenSSL 3.x. No deprecation errors. |
+
+### TC-047: openauto Build with GSTVideoOutput and RtAudio 6.x Patches
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | Implementation §2.4 (Patches #2, #4, #5)               |
+| Method       | I                                                       |
+| Precondition | aasdk built (TC-046), `AndrewGraydon/openauto` cloned   |
+| Procedure    | 1. Build openauto per PiSetup §4.2 with `-DGST_BUILD=TRUE`. 2. Verify `make` completes with exit code 0. 3. Verify `/usr/local/bin/autoapp` exists. 4. Run `ldd /usr/local/bin/autoapp | grep gst` — verify GStreamer libraries linked. 5. Confirm no `QGst` or `Qt5GStreamer` references in binary (`strings /usr/local/bin/autoapp | grep -i qgst`). |
+| Pass Criteria| Build completes. GStreamer libraries linked. No QGst symbols in binary. |
+
+### TC-048: GStreamer Pipeline Initialization
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | Implementation §2.4 (Patch #4), FR-016                 |
+| Method       | T                                                       |
+| Precondition | openauto binary built (TC-047)                          |
+| Procedure    | 1. Start autoapp manually: `QT_QPA_PLATFORM=eglfs /usr/local/bin/autoapp`. 2. Monitor stderr for GStreamer pipeline log output. 3. Verify log shows `GSTVideoOutput: pipeline created` or equivalent. 4. Verify no `gst_parse_error` or `Could not link` errors. 5. Connect phone and start AA session — verify video pipeline starts. |
+| Pass Criteria| GStreamer pipeline initializes without errors. Pipeline log shows decoder element chosen (v4l2h264dec or avdec_h264). |
+
+### TC-049: Audio Stutter Regression Test (RtAudio Mutex)
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | KI-001, Implementation §2.4 (Patch #2)                 |
+| Method       | D                                                       |
+| Precondition | PROJECTION_ACTIVE, music playing via AA, BT speaker connected |
+| Procedure    | 1. Play music (Media stream active). 2. Trigger Google Assistant / Gemini 5 times within 60 seconds (causes concurrent Guidance + Media stream access). 3. Trigger a navigation instruction while music is playing. 4. Listen for audio stutter on BT speaker. 5. Repeat with 3 concurrent triggers. |
+| Pass Criteria| No audible stutter or audio dropout during concurrent stream access. RtAudio mutex prevents race condition. |
+
+### TC-050: Hardware H.264 Decoder Selection (v4l2h264dec)
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-016, Implementation §2.4 (Patch #4)                 |
+| Method       | T                                                       |
+| Precondition | PROJECTION_ACTIVE, GSTVideoOutput pipeline running      |
+| Procedure    | 1. Run `gst-inspect-1.0 v4l2h264dec` — verify element exists. 2. Check autoapp stderr for decoder selection log (e.g., `Using decoder: v4l2h264dec`). 3. Monitor CPU usage via `top` during projection — verify decode is hardware-accelerated (low CPU vs software decode). |
+| Pass Criteria| `v4l2h264dec` found by GStreamer. Decoder log confirms hardware path. CPU usage < 40% during video decode. |
+
+### TC-051: VideoWidget Frame Rendering (QPainter)
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-017, Implementation §2.4 (Patch #4)                 |
+| Method       | D                                                       |
+| Precondition | PROJECTION_ACTIVE with AndrewGraydon/openauto binary    |
+| Procedure    | 1. Connect phone. 2. Verify AA UI renders on 7" display. 3. Verify video fills 800×480 area correctly (no black bars, no overscan, no undersized frame). 4. Verify touch input works (single tap activates AA buttons). 5. Verify no visual tearing or dropped frames. |
+| Pass Criteria| AA video renders at correct size and aspect ratio. Touch works on first tap. No tearing. Display matches screen bounds. |
+
+### TC-052: Full Projection Session — New Binary End-to-End
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-011–FR-031 (all projection requirements), KI-001, KI-002 |
+| Method       | D                                                       |
+| Precondition | AndrewGraydon/openauto binary installed at `/usr/local/bin/autoapp` |
+| Procedure    | 1. Boot PiAuto. 2. Connect phone from scratch (BLE discovery → RFCOMM → WiFi join → AA start). 3. Verify video renders correctly (TC-051). 4. Verify touch input works (TC-043). 5. Play music and trigger Gemini — verify no stutter (TC-049). 6. Disconnect phone — verify return to splash (TC-042). 7. Reconnect — verify projection resumes. |
+| Pass Criteria| Full session completes without regression. KI-001 (stutter) and KI-002 (video/touch) resolved. |
+
+### TC-053: Software Fallback Decoder (avdec_h264)
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-016, Implementation §2.4 (Patch #4)                 |
+| Method       | T                                                       |
+| Precondition | openauto binary built with `-DGST_BUILD=TRUE`           |
+| Procedure    | 1. Temporarily unload v4l2 decoder: `rmmod bcm2835-v4l2` (or confirm `v4l2h264dec` unavailable). 2. Start autoapp and connect phone. 3. Verify log shows `avdec_h264` selected as fallback. 4. Verify video renders (slower/higher CPU but functional). 5. Reload driver. |
+| Pass Criteria| avdec_h264 fallback activates when v4l2h264dec unavailable. Video still renders (functional, not performance pass). |
+
+---
+
+## 26. Test Execution Checklist
 
 | TC ID  | Description                       | Method | Status  | Date       | Notes |
 | :----- | :-------------------------------- | :----- | :------ | :--------- | :---- |
@@ -592,7 +676,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-008 | TCP Listen Port 5000              | T      | Pass    | 2026-03-28 | Verified via `ss -tlnH` during BT_PAIRING |
 | TC-009 | TLS + Version + Service Discovery | T      | Pass    | 2026-03-28 | AA projection fully operational |
 | TC-010 | Reconnection on Loss              | T      | Partial | 2026-03-28 | AA disconnect+reconnect works; WiFi toggle causes phone to rejoin house WiFi instead of AP |
-| TC-011 | H.264 Decode & Display            | D      | Pass    | 2026-03-28 | Video renders on 7" via Qt EGLFS + GStreamer |
+| TC-011 | H.264 Decode & Display            | D      | Pending |            | Requires re-run against AndrewGraydon/openauto binary (GSTVideoOutput rewrite) |
 | TC-012 | PipeWire Audio Path               | T      | Pass    | 2026-03-28 | Audio through PipeWire → BT A2DP speaker |
 | TC-013 | Four Audio Streams                | D+I    | Pending |            |       |
 | TC-014 | Audio Focus / Ducking             | D      | Pass    | 2026-03-28 | Nav voice ducks music, music resumes after |
@@ -627,14 +711,22 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-043 | Single-Tap (No Double-Tap)        | T      | Pass    | 2026-03-28 | libinput disabled, evdevtouch:grab |
 | TC-044 | USB BT Dongle for Speaker         | T      | Pass    | 2026-03-28 | hci1 USB, no stuttering |
 | TC-045 | AP+STA Dual Interface             | T      | Pass    | 2026-03-28 | uap0 AP (192.168.50.1) + wlan0 STA (10.10.0.190) simultaneous |
+| TC-046 | aasdk Build (OpenSSL 3.x)         | I      | Pending |            | Pending Pi build |
+| TC-047 | openauto Build (GSTVideoOutput)   | I      | Pending |            | Pending Pi build |
+| TC-048 | GStreamer Pipeline Init           | T      | Pending |            | Pending Pi build |
+| TC-049 | Audio Stutter Regression          | D      | Pending |            | Pending Pi build; verifies KI-001 fix |
+| TC-050 | HW H.264 Decoder (v4l2h264dec)    | T      | Pending |            | Pending Pi build |
+| TC-051 | VideoWidget Frame Rendering       | D      | Pending |            | Pending Pi build; verifies KI-002 fix |
+| TC-052 | Full Projection — New Binary E2E  | D      | Pending |            | Pending Pi build |
+| TC-053 | Software Fallback Decoder         | T      | Pending |            | Pending Pi build |
 
 ---
 
-## 26. Known Issues
+## 27. Known Issues
 
 | ID | Summary | Severity | Root Cause | Status |
 | :- | :------ | :------- | :--------- | :----- |
-| KI-001 | Audio stutter when notifications or Gemini trigger during music playback | Medium | RtAudio race condition in opencardev/openauto — three audio stream instances (media, guidance, system) concurrently access shared RtAudio buffers without synchronization. OpenDsh fork PR #32 adds a static mutex fix. | Open — OpenDsh binary built but blocked on GSTVideoOutput rewrite (qt-gstreamer removed from Debian 13). See Implementation §2.4. |
-| KI-002 | OpenDsh binary: video sizing and touch input broken on EGLFS | High | Built with `-DGST_BUILD=FALSE` due to missing qt-gstreamer. Falls back to `QtVideoOutput` (QMediaPlayer + QVideoWidget) which cannot properly render raw H.264 NAL units on EGLFS. The `GSTVideoOutput` path (direct GStreamer pipeline) is required. | Open — needs GSTVideoOutput rewrite using plain GStreamer C API. OpenDsh binary saved at `/usr/local/bin/autoapp-opendsh`. |
+| KI-001 | Audio stutter when notifications or Gemini trigger during music playback | Medium | RtAudio race condition — three audio stream instances (media, guidance, system) concurrently access shared RtAudio buffers without synchronization. | Pending build verification — `AndrewGraydon/openauto` piauto-debian13 branch incorporates OpenDsh PR #32 static mutex fix. Verify with TC-049 after Pi build. |
+| KI-002 | Video sizing and touch input broken with QtVideoOutput path on EGLFS | High | `QtVideoOutput` (QMediaPlayer + QVideoWidget) cannot render raw H.264 NAL units on EGLFS. | Pending build verification — `GSTVideoOutput` fully rewritten to use plain GStreamer C API in `AndrewGraydon/openauto`. Verify with TC-011 and TC-052 after Pi build. |
 | KI-003 | Phone occasionally reconnects to house WiFi instead of PiAuto AP | Low | After WiFi toggle or extended idle, phone's WiFi auto-join prioritizes known networks over PiAuto AP. Usually resolves after BT disconnect/reconnect cycle triggers fresh credential exchange. | Intermittent — workaround is BT reconnect cycle. |
 | KI-004 | Connection setup time slightly exceeds 15s target | Low | PhoneDetected → PROJECTION_ACTIVE measured at 16s. WiFi join adds ~4s delay when phone must switch from house WiFi to PiAuto AP. | TC-030 partial pass. |

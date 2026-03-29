@@ -398,9 +398,9 @@ H.264 video arrives via the Media Sink service, is decoded by the Pi 4's hardwar
 | Resolution       | 800×480 (negotiated with phone during service discovery) |
 | Frame Rate       | 30 FPS (maximum for 800×480 per HUIG)   |
 | Max Bitrate      | 4,000 kbps (per HUIG for 480p)           |
-| Decode API       | V4L2 Memory-to-Memory (stateful decoder) |
-| Render Target    | Qt EGLFS (KMS/DRM primary plane, HDMI)   |
-| Pixel Format     | NV12 (V4L2 output) → displayed via Qt/EGL texture or DRM plane |
+| Decode API       | GStreamer pipeline (`v4l2h264dec` hardware-accelerated, `avdec_h264` software fallback) |
+| Render Target    | Qt EGLFS (KMS/DRM primary plane, HDMI) via `VideoWidget` (QPainter) |
+| Pixel Format     | RGB888 (GStreamer `videoconvert` output) → `QImage::Format_RGB888` → QPainter |
 | Latency Budget   | ≤ 2 frames (≤ 66 ms at 30 FPS)           |
 
 **Note on codecs:** The AA protocol also defines VP9, H.265, and AV1 in newer versions, but H.264 Baseline Profile is the only **required** codec. Phones will always support it.
@@ -411,12 +411,17 @@ H.264 video arrives via the Media Sink service, is decoded by the Pi 4's hardwar
 
 ```
 OpenAuto (Media Sink service — receives H.264 NAL units)
-  → write() to V4L2 OUTPUT queue
-  → V4L2 hardware decode (VideoCore VI)
-  → mmap() / dmabuf from V4L2 CAPTURE queue (NV12 frames)
-  → Qt EGLFS rendering (EGL texture upload or DRM PRIME import)
-  → KMS page flip → HDMI output → Display
+  → GSTVideoOutput::write() → GstAppSrc (push H.264 data into pipeline)
+  → GStreamer: queue → h264parse → capssetter (colorimetry=bt709)
+  → GStreamer: v4l2h264dec (VideoCore VI HW) or avdec_h264 (software fallback)
+  → GStreamer: videocrop → videoconvert → video/x-raw,format=RGB
+  → GstAppSink::onNewSample() callback (pull decoded RGB frame)
+  → QImage(Format_RGB888) → emit newFrame() signal [Qt::QueuedConnection]
+  → VideoWidget::updateFrame() → QPainter::drawImage() on next repaint
+  → Qt EGLFS KMS page flip → HDMI output → Display
 ```
+
+**Architecture note:** Qt retains DRM master throughout the session. GStreamer only decodes — it has no display sink and never touches KMS/DRM. This prevents the DRM master conflict that would occur if GStreamer used a KMS/Wayland sink. The `Qt::QueuedConnection` on the `newFrame` signal ensures decoded frame delivery is thread-safe between the GStreamer callback thread and the Qt main thread.
 
 ---
 
