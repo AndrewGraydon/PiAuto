@@ -1,0 +1,8 @@
+[submodule "aasdk"]
+	path = aasdk
+	url = https://github.com/AndrewGraydon/aasdk.git
+	branch = piauto-debian13
+[submodule "openauto"]
+	path = openauto
+	url = https://github.com/AndrewGraydon/openauto.git
+	branch = piauto-debian13
