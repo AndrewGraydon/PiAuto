@@ -9,7 +9,7 @@ PiAuto turns a Raspberry Pi 4B and a 7-inch touchscreen into a standalone Wirele
 ```
 Phone ──BLE──► Pi (discover + pair)
 Phone ──WiFi──► Pi AP (5 GHz 802.11ac)
-Phone ──TCP/TLS──► OpenAuto (AA projection on port 5288)
+Phone ──TCP/TLS──► OpenAuto (AA projection on port 5000)
 Pi ──BT A2DP──► Vehicle Speaker (audio output)
 ```
 
@@ -39,7 +39,7 @@ Pi ──BT A2DP──► Vehicle Speaker (audio output)
 | Component | Specification |
 | :-------- | :------------ |
 | Board | Raspberry Pi 4 Model B (4 GB) |
-| Display | LCDWiki 7" HDMI Display-B (800x480, USB capacitive touch) |
+| Display | 7" HDMI Display (1024x600, USB capacitive touch) |
 | OS | Raspberry Pi OS Lite, Trixie, 64-bit |
 | Audio | Bluetooth A2DP to vehicle speaker |
 | Power | 5.1 V via vehicle buck converter, GPIO 17 ignition sense |
@@ -82,6 +82,7 @@ piauto/
 ├── config.py         # YAML config loader + validator
 ├── openauto.py       # OpenAuto process lifecycle
 ├── splash.py         # PyQt5 EGLFS splash + BT setup UI
+├── volume.py         # AVRCP → PipeWire volume sync
 ├── clock.py          # System time save/restore (no RTC)
 └── log.py            # journald / stderr logging
 ```
@@ -162,7 +163,7 @@ The project follows specification-driven development. All documents are in [`doc
 | [Hardware](docs/Hardware.md) | Hardware specification, GPIO pinout, BOM |
 | [Implementation](docs/Implementation.md) | Code structure, config schema, templates |
 | [Pi Setup](docs/PiSetup.md) | Raspberry Pi setup and deployment guide |
-| [Test Plan](docs/TestPlan.md) | 39 test cases with pass/fail criteria |
+| [Test Plan](docs/TestPlan.md) | 45 test cases with pass/fail criteria |
 | [RTM](docs/RTM.md) | Requirements Traceability Matrix (97% coverage) |
 
 ## Requirements
@@ -176,19 +177,22 @@ The project follows specification-driven development. All documents are in [`doc
 
 ## Project Status
 
-This is a prototype/hobbyist project. The specification suite is complete and the Python orchestrator is implemented.
+This is a prototype/hobbyist project. The full specification suite is complete and the system is operational end-to-end.
 
 **Working:**
+- Full wireless Android Auto projection (BLE discovery → WiFi → TCP/TLS → video + audio)
+- Auto-reconnect — previously paired phones connect automatically on boot
 - Bluetooth speaker discovery and pairing (BR/EDR via dbus-next, with touchscreen UI)
-- A2DP audio output via PipeWire/WirePlumber
-- WiFi AP+STA on single radio (concurrent AP and infrastructure WiFi)
-- Splash screen with status display and Setup button
-- State machine orchestration with GPIO, thermal, and config management
+- 4 concurrent AA audio streams (media, guidance, system, telephony) via PipeWire → BT A2DP
+- AVRCP volume sync (phone volume rocker → PipeWire → BT speaker)
+- WiFi AP+STA on single radio (concurrent AP for phone and infrastructure WiFi for SSH)
+- Splash screen with status display and BT Setup UI
+- State machine orchestration with full error recovery and retry logic
+- Configurable logging (journald on Pi, stderr on dev) via `PIAUTO_LOG_LEVEL`
 
-**In progress:**
-- **aasdk TCP transport** — upstream aasdk supports wired USB only; a fork adding TCP transport is needed for wireless AA (see [Implementation Guide](docs/Implementation.md) §2)
-- **WAA credential exchange** — `ble.py` implements BLE advertising + RFCOMM Profile1 for credential exchange; needs testing against a real phone to verify protobuf field mappings
-- **End-to-end AA projection** — requires aasdk TCP transport to test full phone-to-display flow
+**Known issues:**
+- Audio stutter when concurrent streams are active (e.g., music + Gemini/notifications) — caused by RtAudio race condition in the upstream OpenAuto binary. Fix identified in OpenDsh fork (PR #32), migration in progress. See [Known Issues](docs/TestPlan.md#26-known-issues).
+- Phone occasionally reconnects to house WiFi instead of PiAuto AP after idle period
 
 ## License
 
