@@ -4,6 +4,7 @@ Satisfies: NR-007 (journald ring buffer logging).
 """
 
 import logging
+import os
 import sys
 
 
@@ -25,7 +26,8 @@ def setup_logging() -> None:
     if root.handlers:
         return  # already configured
 
-    root.setLevel(logging.DEBUG)
+    level_name = os.environ.get("PIAUTO_LOG_LEVEL", "INFO").upper()
+    root.setLevel(getattr(logging, level_name, logging.INFO))
 
     if _has_journald():
         from systemd.journal import JournalHandler
