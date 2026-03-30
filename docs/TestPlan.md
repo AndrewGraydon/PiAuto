@@ -3,7 +3,7 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-TP-001                |
-| Version        | 4.1                          |
+| Version        | 4.2                          |
 | Date           | 2026-03-29                   |
 | Status         | Active                       |
 
@@ -507,6 +507,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | Precondition | PROJECTION_ACTIVE, music playing on BT speaker          |
 | Procedure    | 1. Press phone volume up — verify speaker gets louder. 2. Press phone volume down — verify speaker gets quieter. 3. On Pi, run `journalctl -u piauto --since '5 min ago' \| grep AVRCP` — verify volume sync log entries. 4. Run `wpctl get-volume @DEFAULT_AUDIO_SINK@` — verify value changes with phone volume. |
 | Pass Criteria| Phone volume buttons change BT speaker output level. PipeWire sink volume tracks AVRCP 0–127 mapped to 0.0–1.0. |
+| Implementation note | Volume sync uses `dbus_next` async API (`GetManagedObjects` via async D-Bus call) — the asyncio event loop is not blocked during polling. `python-dbus` (synchronous) is no longer used. |
 
 ---
 
@@ -547,8 +548,8 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-027, FR-028                                          |
 | Method       | T                                                       |
 | Precondition | PROJECTION_ACTIVE                                       |
-| Procedure    | 1. Single-tap an AA button (e.g., Home, Media). 2. Verify button activates on first tap. 3. Repeat on 5 different buttons across the screen. 4. Verify `QT_QPA_EGLFS_NO_LIBINPUT=1` is set in the OpenAuto process environment via `cat /proc/<pid>/environ \| tr '\0' '\n' \| grep LIBINPUT`. |
-| Pass Criteria| All buttons activate on single tap. No double-tap needed. libinput disabled in process env. |
+| Procedure    | 1. Single-tap an AA button (e.g., Home, Media). 2. Verify button activates on first tap. 3. Repeat on 5 different buttons across the screen. 4. Verify libinput IS active (not disabled): `cat /proc/<pid>/environ \| tr '\0' '\n' \| grep LIBINPUT` — should return nothing (no `QT_QPA_EGLFS_NO_LIBINPUT` set). 5. Verify double-tap fix is in openauto binary: `strings /usr/local/bin/autoapp \| grep getTouchscreenEnabled` — should match. |
+| Pass Criteria| All buttons activate on single tap. No double-tap. libinput is active; double-tap prevention is in `InputDevice.cpp` (skips synthetic QMouseEvents when touchscreen configured). |
 
 ---
 

@@ -3,7 +3,7 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-PSG-001               |
-| Version        | 1.1                          |
+| Version        | 1.2                          |
 | Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
@@ -80,7 +80,6 @@ sudo apt install -y \
     python3-pip \
     python3-venv \
     python3-yaml \
-    python3-dbus \
     openssl \
     fake-hwclock \
     python3-pyqt5 \

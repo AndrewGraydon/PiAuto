@@ -3,7 +3,7 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-IG-001                |
-| Version        | 1.1                          |
+| Version        | 1.2                          |
 | Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
@@ -147,7 +147,7 @@ File: `/data/piauto.yaml`
 
 wifi:
   ssid: "PiAuto"              # AP network name (string, 1-32 chars)
-  password: "changeme1"        # WPA2-PSK passphrase (string, min 8 chars)
+  password: "yourpassword"     # WPA2-PSK passphrase (string, min 8 chars) — required, no default
   channel: 149                 # 5 GHz channel (149 or 165)
 
 bluetooth:
@@ -229,7 +229,7 @@ WantedBy=multi-user.target
 
 ## 6. hostapd Configuration Template
 
-File generated dynamically at `/tmp/hostapd.conf` by `piauto.wifi` module:
+File generated dynamically at `/run/piauto/hostapd.conf` by `piauto.wifi` module. The directory `/run/piauto/` is created on demand and lives on tmpfs — it is not world-readable like `/tmp`, and is cleaned up automatically on reboot:
 
 > **Note:** The `{interface}` placeholder is auto-detected at runtime. In AP+STA mode (`uap0` exists), the AP runs on `uap0` while `wlan0` remains connected to infrastructure WiFi. In standalone AP mode, `wlan0` is used directly.
 
@@ -263,7 +263,7 @@ max_num_sta=1
 
 ## 7. dnsmasq Configuration Template
 
-File generated at `/tmp/dnsmasq.conf`:
+File generated at `/run/piauto/dnsmasq.conf`:
 
 ```ini
 interface={interface}
@@ -520,8 +520,17 @@ The volume sync module bridges AVRCP volume reports from the phone to PipeWire o
 | Input range | 0–127 (AVRCP) |
 | Output range | 0.0–1.0 (PipeWire linear) |
 | Sink command | `wpctl set-volume @DEFAULT_AUDIO_SINK@ <value>` |
+| D-Bus library | `dbus_next` (async) |
 
-The state machine starts the volume polling task on entry to `PROJECTION_ACTIVE` and cancels it on exit. The module runs as an `asyncio.Task` that reads the D-Bus property, maps the value linearly (`volume / 127`), and calls `wpctl` only when the value changes.
+The state machine calls `await self._volume.start()` on entry to `PROJECTION_ACTIVE` and `await self._volume.stop()` on exit. The module runs as an `asyncio.Task` that:
+
+1. Opens a single `dbus_next` system bus connection for its lifetime.
+2. Calls `GetManagedObjects` on `org.bluez` asynchronously every 0.3 s — the event loop is **not blocked** during this call (contrast with the prior synchronous `python-dbus` approach which blocked the loop for every poll).
+3. Maps each `MediaTransport1.Volume` value linearly (`volume / 127`).
+4. Calls `wpctl` only when the value changes, with a guard (`_wpctl_proc`) that skips the call if a previous `wpctl` invocation is still running (prevents concurrent invocations when the poll interval is shorter than `wpctl` startup time).
+5. Disconnects the bus cleanly on cancellation via a `finally` block.
+
+**Dependency:** `dbus_next` (already a project dependency used by `ble.py` and `bt_pair.py`). The prior `python-dbus` (`python3-dbus`) dependency is **no longer required** for volume sync.
 
 ---
 
@@ -588,21 +597,36 @@ apt install libqt5multimedia5-plugins gstreamer1.0-libav \
 
 ### 17.1 Problem: libinput Double-Tap
 
-Qt EGLFS auto-loads the `libinput` plugin by default, which reads the USB touchscreen (wch.cn USB2IIC_CTP_CONTROL) and registers it as **both a pointer device and a touch device**. This causes every physical tap to generate two events — one from each device registration — resulting in double-tap behavior in OpenAuto.
+Qt EGLFS loads the `libinput` plugin, which reads the USB touchscreen (wch.cn USB2IIC_CTP_CONTROL) and delivers each physical touch as **both a `QTouchEvent` and a synthetic `QMouseEvent`**. The original `InputDevice::eventFilter` processed both, causing every tap to register twice in OpenAuto (double-tap behavior).
 
-### 17.2 Fix: Disable libinput, Use evdevtouch with Exclusive Grab
+### 17.2 Fix: Skip Synthetic Mouse Events in InputDevice
 
-Set `QT_QPA_EGLFS_NO_LIBINPUT=1` in the subprocess environment to prevent Qt from loading libinput. Then specify the `evdevtouch` plugin explicitly with the `:grab` parameter to claim exclusive access to the device node, preventing any other process from also reading it.
+libinput is retained for input handling (it provides correct multi-touch event delivery). The double-tap is fixed in `openauto/Projection/InputDevice.cpp` by skipping synthetic mouse events when a touchscreen is configured:
 
-This applies to **both** the splash screen (`splash.py`) and OpenAuto (`openauto.py`) subprocess environments:
+```cpp
+else if (event->type() == QEvent::MouseButtonPress ||
+         event->type() == QEvent::MouseButtonRelease ||
+         event->type() == QEvent::MouseMove)
+{
+    // libinput synthesizes a QMouseEvent for each touch contact.
+    // Skip these when a touchscreen is configured — only the
+    // QTouchEvent path is used, preventing double-tap.
+    if (configuration_->getTouchscreenEnabled())
+        return false;
+    return this->handleMouseEvent(event);
+}
+```
+
+This fix is committed to `AndrewGraydon/openauto` branch `piauto-debian13`.
+
+The OpenAuto subprocess environment uses:
 
 ```python
 env={
     **os.environ,
     "QT_QPA_PLATFORM": "eglfs",
     "QT_QPA_EGLFS_KMS_CONFIG": "/data/eglfs.json",
-    "QT_QPA_EGLFS_NO_LIBINPUT": "1",
-    "QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS": "/dev/input/by-id/usb-wch.cn_USB2IIC_CTP_CONTROL-event-if00:rotate=0:grab",
+    "QT_QPA_EGLFS_HIDECURSOR": "1",
     "XDG_RUNTIME_DIR": "/run/user/1000",
     "PULSE_SERVER": "unix:/run/user/1000/pulse/native",
 }
@@ -610,10 +634,9 @@ env={
 
 | Variable | Purpose |
 | :------- | :------ |
-| `QT_QPA_EGLFS_NO_LIBINPUT` | Disables libinput plugin; Qt falls back to evdev input plugins |
-| `QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS` | Specifies the touch device path and activates `:grab` for exclusive access |
+| `QT_QPA_EGLFS_HIDECURSOR` | Hides the mouse cursor (irrelevant on a touchscreen) |
 
-**Note:** The `:grab` parameter uses the kernel `EVIOCGRAB` ioctl to ensure the device node is owned exclusively by the Qt process. The device path (`/dev/input/by-id/...`) should use a stable symlink rather than a volatile `eventN` index.
+**Note:** `QT_QPA_EGLFS_NO_LIBINPUT` is **not** set — libinput is active and provides correct touch event delivery. The double-tap prevention is in `InputDevice.cpp`, not the environment.
 
 ---
 

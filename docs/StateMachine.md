@@ -3,7 +3,7 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-SM-001                |
-| Version        | 3.1                          |
+| Version        | 3.2                          |
 | Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
@@ -226,7 +226,7 @@ stateDiagram-v2
 1. **IgnitionOff is always handled.** Every state has a transition on `IgnitionOff` → SHUTDOWN. This is a system-wide interrupt, not a queued event.
 2. **Single active state.** The system is in exactly one state at any time. There are no concurrent/parallel states.
 3. **No implicit transitions.** Every state change is triggered by an explicit event from the event catalog.
-4. **Retry isolation.** ERROR_RECOVERY is only reachable from TCP_CONNECT and PROJECTION_ACTIVE (states where the phone is on the AP). BT and WiFi failures return directly to IDLE. Retries re-enter TCP_CONNECT only.
+4. **Retry isolation.** ERROR_RECOVERY is only reachable from TCP_CONNECT and PROJECTION_ACTIVE — both via their defined events (`OpenAutoFailed`, `ConnectionLost`) and via any unhandled exception raised within those state handlers (which is routed to ERROR_RECOVERY rather than SHUTDOWN, because the phone is still on the AP and a retry is meaningful). BT and WiFi failures return directly to IDLE. Retries re-enter TCP_CONNECT only.
 5. **Display ownership.** Exactly one process owns the DRM master at any time: either the splash screen app or OpenAuto. They never run concurrently.
 6. **OpenAuto autonomy.** During TCP_CONNECT and PROJECTION_ACTIVE, the state machine does NOT interfere with OpenAuto's internal protocol handling. It monitors the process (alive/exited), GPIO 17, and — during PROJECTION_ACTIVE — OpenAuto's stderr for projection-stopped log patterns (via `wait_for_projection_stopped()`). The state machine does not parse any other OpenAuto output beyond these defined patterns.
 

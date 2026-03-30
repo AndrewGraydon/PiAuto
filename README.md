@@ -115,9 +115,9 @@ sudo mkdir -p /data
 sudo tee /data/piauto.yaml << 'EOF'
 wifi:
   ssid: "PiAuto"
-  password: "changeme1"   # change this
+  password: "yourpassword"   # required — no default, min 8 characters
   channel: 149
-  country: "AU"           # change to your country code
+  country: "AU"              # change to your country code
 bluetooth:
   device_name: "PiAuto"
 openauto:
@@ -210,7 +210,12 @@ This is a prototype/hobbyist project. The full specification suite is complete a
 - Configurable logging (journald on Pi, stderr on dev) via `PIAUTO_LOG_LEVEL`
 - GSTVideoOutput rewrite — plain GStreamer C API (no qt-gstreamer); leaky post-decoder queue eliminates touch-to-screen latency; 30 FPS QTimer paint loop decouples decode from Qt event queue
 - Audio stutter fix — RtAudio static mutex (OpenDsh PR #32) eliminates concurrent buffer access race
-- Touch double-tap fix — libinput disabled (`QT_QPA_EGLFS_NO_LIBINPUT=1`), evdevtouch with exclusive grab used instead
+- Touch double-tap fix — libinput used for input; `InputDevice.cpp` skips synthetic mouse events when a touchscreen is configured, preventing the double-tap caused by both QTouchEvent and synthetic QMouseEvent firing for each contact
+- AVRCP volume sync rewritten to `dbus_next` async API — D-Bus calls no longer block the asyncio event loop
+- Async correctness fixes — `asyncio.get_running_loop()` throughout; `asyncio.gather` for task drain; `subprocess.run` replaced with async in shutdown handler
+- Hardened error routing — unhandled exceptions in TCP_CONNECT/PROJECTION_ACTIVE now enter ERROR_RECOVERY (retry) instead of going directly to SHUTDOWN
+- Config files (`hostapd.conf`, `dnsmasq.conf`) written to `/run/piauto/` (tmpfs) instead of world-readable `/tmp`
+- WiFi password has no hardcoded default — missing password fails validation loudly, pointing to `/data/piauto.yaml`
 
 **Known issues:**
 - Phone occasionally reconnects to house WiFi instead of PiAuto AP after idle period
