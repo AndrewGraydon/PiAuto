@@ -728,7 +728,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-028 | Video Frame Rate                  | M      | Pending |            |       |
 | TC-029 | Audio Latency                     | M      | Pending |            | Requires recording equipment |
 | TC-030 | Connection Setup Time             | M      | Fail    | 2026-03-28 | PhoneDetected→PROJECTION_ACTIVE 16s (req: <15s); WiFi join adds ~4s delay |
-| TC-031 | Power-Loss Resilience             | T      | Partial | 2026-03-29 | Clean reboot verified: BlueZ bind mount active, no re-pairing, WiFi AP restored, piauto active. Unclean power-cut test (mid-session pull) still pending. |
+| TC-031 | Power-Loss Resilience             | T      | Pass    | 2026-03-29 | Hard power cut mid-session: all services restored on boot, phone reconnected without re-pairing, BT speaker auto-reconnected, WiFi AP and BlueZ bind mount active. NTP corrected clock (WiFi available in test env). |
 | TC-032 | 12-Hour Soak Test                 | T      | Pending |            |       |
 | TC-033 | Config & Logging Inspection       | I      | Pass    | 2026-03-28 | Single YAML config, journald only, no log files |
 | TC-034 | BT Speaker Mid-Session Disconnect | T      | Pass    | 2026-03-29 | Speaker reconnected automatically after 5-10s power cycle. Volume restored higher than prior level — acceptable behaviour (BlueZ restores its own volume state, not PiAuto's) |
