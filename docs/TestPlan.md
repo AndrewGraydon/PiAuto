@@ -106,8 +106,8 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-006, FR-007, FR-008, FR-009                          |
 | Method       | T                                                       |
 | Precondition | System in WIFI_WAIT state                               |
-| Procedure    | 1. On Pi, run `iw dev wlan0 info` to verify 5 GHz channel (149 or 165). 2. Run `hostapd_cli status` to verify WPA2-AES. 3. Verify Pi interface has IP 192.168.1.1 via `ip addr`. 4. On phone or laptop, scan for SSID. |
-| Pass Criteria| AP on 5 GHz, channel 149 or 165, WPA2-AES, correct SSID, Pi at 192.168.1.1. |
+| Procedure    | **AP+STA mode (NM-managed, primary):** 1. Run `nmcli dev status` — verify `uap0` connected as `piauto-ap`. 2. Run `iw dev uap0 info` — verify AP mode and 5 GHz channel. 3. Run `ip addr show uap0 \| grep inet` — verify Pi at 192.168.50.1/24. 4. On phone or laptop, scan for PiAuto SSID. **Standalone mode (hostapd fallback):** 1. Run `iw dev wlan0 info` to verify 5 GHz channel (149 or 165). 2. Run `hostapd_cli status` to verify WPA2-AES. 3. Verify Pi has IP 192.168.1.1 via `ip addr show wlan0`. |
+| Pass Criteria| AP on 5 GHz, WPA2-AES, correct SSID. Pi at 192.168.50.1 (AP+STA) or 192.168.1.1 (standalone). |
 
 ### TC-007: DHCP Lease Assignment
 
@@ -116,8 +116,8 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-010                                                  |
 | Method       | T                                                       |
 | Precondition | AP running, phone joining AP                            |
-| Procedure    | 1. Phone connects to PiAuto AP. 2. On Pi, inspect dnsmasq lease file or logs. 3. Verify phone received IP in 192.168.1.100–199 range. |
-| Pass Criteria| Phone receives a DHCP lease within the specified range. |
+| Procedure    | 1. Phone connects to PiAuto AP. 2. **AP+STA (NM-managed):** Check NM lease file `cat /var/lib/NetworkManager/dnsmasq-uap0.leases` — verify phone received IP in 192.168.50.100–199 range. **Standalone:** Inspect dnsmasq logs — verify phone received IP in 192.168.1.100–199 range. |
+| Pass Criteria| Phone receives a DHCP lease within the mode-appropriate range (192.168.50.100–199 for AP+STA; 192.168.1.100–199 for standalone). |
 
 ---
 
@@ -131,7 +131,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | Method       | T                                                       |
 | Precondition | OpenAuto started, system in TCP_CONNECT                 |
 | Procedure    | 1. On Pi, run `ss -tlnp | grep 5000`. 2. Verify OpenAuto is listening. |
-| Pass Criteria| TCP socket bound to 192.168.1.1:5000 in LISTEN state.  |
+| Pass Criteria| TCP socket bound on port 5000 in LISTEN state (192.168.50.1:5000 in AP+STA mode; 192.168.1.1:5000 in standalone mode). |
 
 ### TC-009: TLS, Version Negotiation & Service Discovery
 
@@ -457,8 +457,8 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-002 (timeout path), SM §3.3                          |
 | Method       | T                                                       |
 | Precondition | System in IDLE, phone initiates BLE connection           |
-| Procedure    | 1. Start RFCOMM credential exchange but block/delay phone response (e.g., airplane mode mid-pairing). 2. Wait 15 seconds. 3. Verify state machine transitions to IDLE (not ERROR_RECOVERY). 4. Verify BLE advertising resumes. |
-| Pass Criteria| BT_PAIRING times out after 15 s. Returns to IDLE. No ERROR_RECOVERY entered. |
+| Procedure    | 1. Start RFCOMM credential exchange but block/delay phone response (e.g., airplane mode mid-pairing). 2. Wait 30 seconds. 3. Verify state machine transitions to IDLE (not ERROR_RECOVERY). 4. Verify BLE advertising resumes. |
+| Pass Criteria| BT_PAIRING times out after 30 s (`BT_PAIRING_TIMEOUT_S`). Returns to IDLE. No ERROR_RECOVERY entered. |
 
 ### TC-037: TCP_CONNECT Timeout
 
@@ -599,7 +599,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | Implementation §2.4 (Patches #2, #4, #5)               |
 | Method       | I                                                       |
 | Precondition | aasdk built (TC-046), `AndrewGraydon/openauto` cloned   |
-| Procedure    | 1. Build openauto per PiSetup §4.2 with `-DGST_BUILD=TRUE`. 2. Verify `make` completes with exit code 0. 3. Verify `/usr/local/bin/autoapp` exists. 4. Run `ldd /usr/local/bin/autoapp | grep gst` — verify GStreamer libraries linked. 5. Confirm no `QGst` or `Qt5GStreamer` references in binary (`strings /usr/local/bin/autoapp | grep -i qgst`). |
+| Procedure    | 1. Build openauto per PiSetup §4.2 with `-DGST_BUILD=ON`. 2. Verify `cmake --build` completes with exit code 0. 3. Verify `/usr/local/bin/autoapp` exists. 4. Run `ldd /usr/local/bin/autoapp | grep gst` — verify GStreamer libraries linked. 5. Confirm no `QGst` or `Qt5GStreamer` references in binary (`strings /usr/local/bin/autoapp | grep -i qgst`). |
 | Pass Criteria| Build completes. GStreamer libraries linked. No QGst symbols in binary. |
 
 ### TC-048: GStreamer Pipeline Initialization
@@ -658,7 +658,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | :----------- | :------------------------------------------------------ |
 | Traces to    | FR-016, Implementation §2.4 (Patch #4)                 |
 | Method       | T                                                       |
-| Precondition | openauto binary built with `-DGST_BUILD=TRUE`           |
+| Precondition | openauto binary built with `-DGST_BUILD=ON`             |
 | Procedure    | 1. Temporarily unload v4l2 decoder: `rmmod bcm2835-v4l2` (or confirm `v4l2h264dec` unavailable). 2. Start autoapp and connect phone. 3. Verify log shows `avdec_h264` selected as fallback. 4. Verify video renders (slower/higher CPU but functional). 5. Reload driver. |
 | Pass Criteria| avdec_h264 fallback activates when v4l2h264dec unavailable. Video still renders (functional, not performance pass). |
 
@@ -744,7 +744,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-044 | USB BT Dongle for Speaker         | T      | Pass    | 2026-03-28 | hci1 USB, no stuttering |
 | TC-045 | AP+STA Dual Interface             | T      | Pass    | 2026-03-28 | uap0 AP (192.168.50.1) + wlan0 STA (10.10.0.190) simultaneous |
 | TC-046 | aasdk Build (OpenSSL 3.x)         | I      | Pass    | 2026-03-29 | Built clean on Debian 13 against OpenSSL 3.x |
-| TC-047 | openauto Build (GSTVideoOutput)   | I      | Pass    | 2026-03-29 | Built with -DGST_BUILD=TRUE; GStreamer linked |
+| TC-047 | openauto Build (GSTVideoOutput)   | I      | Pass    | 2026-03-29 | Built with -DGST_BUILD=ON; GStreamer linked |
 | TC-048 | GStreamer Pipeline Init           | T      | Pass    | 2026-03-29 | VideoService start + start indication logged; no pipeline errors |
 | TC-049 | Audio Stutter Regression          | D      | Pass    | 2026-03-29 | Static mutex fix (PR #32) built and deployed 2026-03-29. Music + Gemini concurrent trigger — no stutter observed. KI-001 resolved. |
 | TC-050 | HW H.264 Decoder (v4l2h264dec)    | T      | Pending |            | Check autoapp logs for decoder selection |

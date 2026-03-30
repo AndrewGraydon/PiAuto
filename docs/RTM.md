@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-RTM-001               |
-| Version        | 3.1                          |
-| Date           | 2026-03-27                   |
+| Version        | 3.2                          |
+| Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
 ## 1. Introduction
@@ -33,8 +33,8 @@ This document traces every requirement in PiAuto-SRS-001 forward to the architec
 | FR-006 | Start 5 GHz 802.11ac AP       | hostapd (§4.2)         | IF-02 (§4)    | WIFI_WAIT               | TC-006    |
 | FR-007 | AP on channel 149/165 (no DFS) | hostapd (§4.2)         | IF-02 (§4.2)  | WIFI_WAIT               | TC-006    |
 | FR-008 | WPA2-AES with min 8-char PSK  | hostapd (§4.2)         | IF-02 (§4.2)  | WIFI_WAIT               | TC-006    |
-| FR-009 | Pi static IP 192.168.1.1      | hostapd (§4.2)         | IF-02 (§4.3)  | WIFI_WAIT               | TC-006    |
-| FR-010 | DHCP 192.168.1.100–199        | dnsmasq (§4.2)         | IF-02 (§4.3)  | WIFI_WAIT               | TC-007    |
+| FR-009 | Pi static IP on AP interface  | NetworkManager / hostapd (§4.2) | IF-02 (§4.3) | WIFI_WAIT | TC-006 |
+| FR-010 | DHCP on AP interface          | NetworkManager / dnsmasq (§4.2) | IF-02 (§4.3) | WIFI_WAIT | TC-007 |
 | FR-011 | Listen on TCP port 5000       | OpenAuto (§4.3)        | IF-03 (§5)    | TCP_CONNECT             | TC-008    |
 | FR-012 | TLS 1.2+ handshake            | OpenAuto (§4.3)        | IF-03 (§5.2)  | TCP_CONNECT             | TC-009    |
 | FR-013 | AA version negotiation         | OpenAuto (§4.3)        | IF-03 (§5.6)  | TCP_CONNECT             | TC-009    |
@@ -122,7 +122,7 @@ This document traces every requirement in PiAuto-SRS-001 forward to the architec
 | Touch Input (Qt evdev)   | FR-027, FR-031                          | Yes       |
 | GPIO Manager (libgpiod)  | FR-032–035                              | Yes       |
 | Thermal Monitor          | FR-035                                  | Yes       |
-| Clock Module             | FR-042                                  | Yes       |
+| Clock Module             | FR-042, FR-043                          | Yes       |
 
 **Orphan check:** No orphan components. All components trace to at least one requirement.
 

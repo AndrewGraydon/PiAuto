@@ -156,7 +156,7 @@ bluetooth:
   speaker_mac: ""             # Preferred A2DP speaker MAC (empty = auto)
 
 display:
-  resolution: "800x480"       # Display resolution (informational — matches config.txt)
+  resolution: "1024x600"      # Physical display native resolution (informational). AA stream is 800×480; VideoWidget scales to fill display.
   fps: 30                     # Target frame rate
 
 audio:

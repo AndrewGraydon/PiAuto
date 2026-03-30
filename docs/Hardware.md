@@ -182,9 +182,20 @@ Two options are supported. The choice is made at build time and configured in `/
 | SNR            | ~112 dB                           |
 | Use Case       | Compact build, no USB port consumed |
 
+### Bluetooth Adapter Configuration
+
+Two Bluetooth adapters are used to eliminate WiFi/BT radio contention:
+
+| Adapter | Interface | MAC | Role |
+| :------ | :-------- | :-- | :--- |
+| BCM43455 (on-board) | hci0 | e4:5f:01:0c:82:9e | BLE WAA discovery + RFCOMM credential exchange |
+| USB BT dongle (CSR8510 or equivalent) | hci1 | 00:19:86:00:14:BB | BT A2DP audio output to vehicle speaker |
+
+The BCM43455 shares a physical radio with WiFi. Under concurrent WiFi AP + BT A2DP load, contention causes audio dropouts. Offloading A2DP to a dedicated USB BT adapter (hci1) eliminates this.
+
 ### Primary Audio Path
 
-For this prototype, audio output is primarily via **Bluetooth A2DP** to a vehicle speaker. The DAC/USB audio serves as a fallback or secondary output. PipeWire handles routing to whichever sink is available.
+For this prototype, audio output is via **Bluetooth A2DP** to a vehicle speaker using the USB BT dongle (hci1). The on-board BT (hci0) handles BLE and RFCOMM. PipeWire/WirePlumber routes audio to the hci1 A2DP sink.
 
 ---
 
@@ -264,5 +275,6 @@ This is a prototype build. The enclosure is user-provided (existing off-the-shel
 | 1   | IRLZ44N N-channel MOSFET                | Fan switching            |
 | 1   | 1N4007 diode                             | Flyback protection       |
 | 1   | 10 kΩ resistor                           | MOSFET gate pull-down    |
+| 1   | USB Bluetooth dongle (CSR8510 or equivalent, A2DP-capable) | Dedicated BT A2DP adapter (hci1) for speaker audio, eliminating WiFi/BT radio contention on hci0 |
 | 1   | USB audio dongle OR PCM5102A DAC board   | Audio output (optional)  |
 | —   | Hookup wire, connectors, mounting hardware| Assembly                |

@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-SRS-001               |
-| Version        | 3.1                          |
-| Date           | 2026-03-27                   |
+| Version        | 3.2                          |
+| Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
 ## 1. Introduction
@@ -104,10 +104,10 @@ Audio is routed from the Pi over Bluetooth A2DP to a vehicle speaker (or speaker
 
 | ID     | Requirement                                                                                                  | Priority |
 | :----- | :----------------------------------------------------------------------------------------------------------- | :------- |
-| FR-006 | The system shall start a 5 GHz 802.11ac (Wi-Fi 5) access point using hostapd upon successful credential exchange. | Must     |
+| FR-006 | The system shall start a 5 GHz 802.11ac (Wi-Fi 5) access point upon successful credential exchange. In AP+STA mode the AP is managed by NetworkManager (profile `piauto-ap` on `uap0`); in standalone mode, hostapd is used on `wlan0`. | Must     |
 | FR-007 | The AP shall operate on channel 149 or 165 to avoid DFS/TPC regulatory restrictions.                        | Must     |
 | FR-008 | The AP shall use WPA2-AES encryption with a minimum 8-character PSK.                                        | Must     |
-| FR-009 | The AP shall assign the Pi a static IP on the AP interface: 192.168.50.1 (AP+STA mode) or 192.168.1.1 (standalone). | Must     |
+| FR-009 | The AP shall assign the Pi a static IP on the AP interface: `192.168.50.1` in AP+STA mode (uap0, NM-managed) or `192.168.1.1` in standalone mode (wlan0, hostapd). | Must     |
 | FR-010 | The AP shall provide DHCP to connected clients with mode-appropriate address ranges.                        | Must     |
 
 ### 3.3 Connection & Projection Tunnel

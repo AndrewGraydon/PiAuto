@@ -95,9 +95,17 @@ This two-transport architecture is confirmed by the WirelessAndroidAutoDongle pr
 | Parameter            | Value                                          |
 | :------------------- | :--------------------------------------------- |
 | Bluetooth Type       | Classic (BR/EDR)                               |
+| Adapter              | hci1 (USB BT dongle, MAC 00:19:86:00:14:BB) — dedicated to A2DP to avoid WiFi/BT radio contention on hci0 |
 | Profiles             | A2DP Sink (stereo audio output to BT speaker)  |
 | Profiles (Optional)  | HFP AG (hands-free gateway for phone calls — out of scope for v1) |
 | Discoverable         | Yes (for initial speaker pairing)              |
+
+**Adapter allocation:**
+
+| Adapter | Interface | Role |
+| :------ | :-------- | :--- |
+| BCM43455 (on-board) | hci0 (MAC e4:5f:01:0c:82:9e) | BLE WAA advertising + RFCOMM credential exchange |
+| USB BT dongle | hci1 (MAC 00:19:86:00:14:BB) | BT A2DP audio output to vehicle speaker |
 
 ### 3.5 Connection Sequence
 
@@ -238,7 +246,7 @@ The AP is **not** running at all times. It is started and stopped by the state m
 
 - **Start:** On transition to WIFI_WAIT (after RFCOMM credentials sent).
 - **Stop:** On transition to IDLE (after disconnection or shutdown).
-- **Timeout:** If no phone joins within 30 seconds, event `WifiTimeout` is raised → transition to ERROR_RECOVERY.
+- **Timeout:** If no phone joins within 30 seconds, event `WifiTimeout` is raised → transition to IDLE (not ERROR_RECOVERY — the phone never reached the AP, so TCP retries are meaningless).
 
 ---
 
@@ -386,7 +394,7 @@ Channels are allocated dynamically during service discovery. The following are t
 | :------------------ | :- | :-------------------- | :-------------- |
 | SENSOR_NIGHT_MODE   | 10 | `NightModeData { bool night_mode }` | Default: phone-controlled (Pi reports "not available", phone uses its own light sensor) |
 
-Other sensor types defined by the AA protocol (Location, Speed, RPM, Fuel, Gear, etc.) are **not implemented** in this version. They are relevant if OBD-II integration is added in the future (FR-042, FR-043).
+Other sensor types defined by the AA protocol (Location, Speed, RPM, Fuel, Gear, etc.) are **not implemented** in this version. They are relevant if OBD-II integration is added in the future (FR-046, FR-047).
 
 ---
 
@@ -498,7 +506,7 @@ OpenAuto outputs audio via RtAudio, which connects to PipeWire through the `pipe
 OpenAuto (RtAudio) → pipewire-pulse → PipeWire → WirePlumber → BlueZ A2DP → BT Speaker
 ```
 
-> **Known issue (KI-001):** The opencardev RtAudio backend creates three separate stream instances without synchronization. Concurrent buffer access causes audible stutter when multiple AA audio channels are active simultaneously (e.g., music + notification/Gemini). The OpenDsh fork adds a static mutex fix (PR #32). PipeWire buffer tuning (quantum, SBC-XQ) was tested but does not resolve the issue — the race condition is in the application layer, not the audio subsystem.
+> **KI-001 (Closed 2026-03-29):** The original opencardev RtAudio backend had concurrent buffer access without synchronization, causing audible stutter when multiple AA audio channels were active simultaneously. The `AndrewGraydon/openauto` fork (branch `piauto-debian13`) incorporates OpenDsh PR #32 which adds a `static std::mutex RtAudioOutput::mutex_` serializing all RtAudio operations. Verified fixed in TC-049.
 
 ---
 

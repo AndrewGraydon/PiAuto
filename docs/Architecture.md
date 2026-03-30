@@ -295,7 +295,7 @@ All processes except `piauto-main` are managed as systemd services. `piauto-main
 
 1. **Boot:** systemd starts `bluetoothd`, `pipewire`, `wireplumber`, then `piauto-main`.
 2. **IDLE:** `piauto-main` advertises BLE, launches splash Qt process (single long-lived process with `QStackedWidget` for view switching). User can tap "Setup" to enter BT speaker pairing without restarting the process.
-3. **BT_PAIRING → WIFI_WAIT:** `piauto-main` starts `hostapd` + `dnsmasq`.
+3. **BT_PAIRING:** `piauto-main` calls `WifiManager.start_ap()`. In AP+STA mode, this detects that NetworkManager already has the `uap0` AP active and returns immediately (no hostapd/dnsmasq needed). In standalone mode, `piauto-main` launches `hostapd` + `dnsmasq` on `wlan0`.
 4. **TCP_CONNECT:** `piauto-main` kills the splash process (releases DRM master), launches `openauto` (Qt EGLFS). OpenAuto takes over the display and listens on TCP 5000.
 5. **PROJECTION_ACTIVE:** OpenAuto handles everything. `piauto-main` monitors OpenAuto's process and GPIO 17. A background `_periodic_clock_save()` task also runs, saving the current time to `/data/clock` every 5 minutes so that an unexpected power cut leaves the clock file at most 5 minutes stale.
 6. **Disconnect:** OpenAuto exits. `piauto-main` reclaims the display (relaunches splash), stops `hostapd`, returns to IDLE.
@@ -309,7 +309,7 @@ All processes except `piauto-main` are managed as systemd services. `piauto-main
 
 - **Base:** Raspberry Pi OS Lite, Trixie, 64-bit (aarch64)
 - **Kernel:** Linux 6.x with V4L2 M2M, KMS/DRM, and libgpiod support
-- **Filesystem:** overlayfs — read-only root (`/`) with tmpfs overlay for `/tmp`, `/var/run`, `/var/log`
+- **Filesystem:** overlayfs (read-only root, deferred — see TC-025). The BlueZ bind mount (`/data/bluetooth/ → /var/lib/bluetooth/`, via `/etc/fstab`) is active and provides pairing-DB persistence across power loss. The ext4 journal on the `/data` partition and the read-write root provides adequate power-loss resilience for the prototype.
 - **Writable partition:** `/data` (ext4) for persistent configuration and pairing records
 
 ### 7.2 Partition Layout
@@ -345,20 +345,19 @@ The `/data` partition is the sole writable, persistent storage on the system. It
 
 This must be set up before enabling overlayfs (see PiSetup §6).
 
-### 7.3 Display Configuration (config.txt)
+### 7.4 Display Configuration (config.txt)
+
+> **WARNING:** On RPi OS Trixie with the KMS display driver (`dtoverlay=vc4-kms-v3d`, the default), do **not** add legacy `hdmi_group`/`hdmi_mode`/`hdmi_cvt`/`hdmi_drive` settings — they conflict with KMS and cause a blank screen. The KMS driver reads EDID and auto-detects the display's native resolution (1024×600). Qt EGLFS is configured via `/data/eglfs.json`.
 
 ```ini
-# PiAuto Display Configuration — LCDWiki 7" HDMI-B
-hdmi_group=2
-hdmi_mode=87
-hdmi_cvt 800 480 60 6 0 0 0
-hdmi_drive=2
-
-# GPU memory for V4L2 decode + Qt EGLFS
+# GPU memory for V4L2 H.264 decode + Qt EGLFS
 gpu_mem=128
+
+# SD card overclock for faster boot (optional)
+dtparam=sd_overclock=100
 ```
 
-### 7.4 Boot Optimizations
+### 7.5 Boot Optimizations
 
 To achieve the < 25 s boot-to-IDLE target (PR-001), the following optimizations shall be applied:
 

@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-SM-001                |
-| Version        | 3.0                          |
-| Date           | 2026-03-27                   |
+| Version        | 3.1                          |
+| Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
 ## 1. Introduction
@@ -91,7 +91,7 @@ stateDiagram-v2
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | Stop hostapd + dnsmasq (if running). Kill OpenAuto (if running). Advertise WAA BLE service UUID. Attempt auto-reconnect to last known phone (directed BLE advertising). Ensure splash screen is running ("Waiting for phone"). |
+| Entry Actions  | Stop AP via `WifiManager.stop_ap()` (stops hostapd + dnsmasq if running in standalone mode; no-op in NM-managed mode). Kill OpenAuto (if running). Advertise WAA BLE service UUID. Attempt auto-reconnect to last known phone (directed BLE advertising). Ensure splash screen is running ("Waiting for phone"). |
 | Exit Actions   | Stop BLE advertising                                          |
 | Satisfies      | FR-001, FR-005, FR-036, NR-004                                |
 
@@ -104,9 +104,9 @@ stateDiagram-v2
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | Accept Classic BT pairing. Start hostapd + dnsmasq (AP). Kill splash screen app. Launch OpenAuto process (takes over display). Wait for OpenAuto TCP port 5000 ready. Exchange Wi-Fi credentials via RFCOMM (WifiInfoResponse + WifiStartResponse). |
+| Entry Actions  | Accept Classic BT pairing. Start AP via `WifiManager.start_ap()` (in AP+STA mode, NetworkManager already has the `uap0` AP active — no action needed; in standalone mode, starts hostapd + dnsmasq). Kill splash screen app. Launch OpenAuto process (takes over display). Wait for OpenAuto TCP port 5000 ready. Exchange Wi-Fi credentials via RFCOMM (WifiInfoResponse + WifiStartResponse). |
 | Exit Actions   | Store/update pairing record in `/data/bt/`                    |
-| Timeout        | 15 seconds                                                    |
+| Timeout        | 30 seconds (covers AP startup + port-ready wait + RFCOMM exchange) |
 | Satisfies      | FR-002, FR-003, FR-004, FR-037                                |
 
 | Event              | Guard               | Target State      | Actions                        |
@@ -157,8 +157,8 @@ stateDiagram-v2
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | OpenAuto is streaming video to display and audio to PipeWire. Touch input forwarding is active. Start AVRCP volume sync (poll BlueZ MediaTransport1.Volume, map to PipeWire default sink via wpctl). Start `wait_for_projection_stopped()` monitoring task on OpenAutoManager. |
-| Exit Actions   | Stop AVRCP volume sync. Cancel `wait_for_projection_stopped()` task.  |
+| Entry Actions  | OpenAuto is streaming video to display and audio to PipeWire. Touch input forwarding is active. Start AVRCP volume sync (poll BlueZ MediaTransport1.Volume, map to PipeWire default sink via wpctl). Start `wait_for_projection_stopped()` monitoring task on OpenAutoManager. Start `_periodic_clock_save()` background task (saves `/data/clock` every `CLOCK_SAVE_INTERVAL_S` = 300 s so power-loss leaves clock ≤5 min stale). |
+| Exit Actions   | Stop AVRCP volume sync. Cancel `wait_for_projection_stopped()` task. Cancel `_periodic_clock_save()` task. |
 | Satisfies      | FR-016 to FR-031, FR-038, FR-039, PR-002, PR-003, PR-004     |
 
 | Event              | Guard                    | Target State      | Actions                      |
@@ -168,6 +168,8 @@ stateDiagram-v2
 | IgnitionOff        | —                        | SHUTDOWN          | —                            |
 
 **Note on autoapp non-exit behavior:** When the phone ends an AA session, `autoapp` does **not** exit — it remains running and displays its own waiting screen. The state machine therefore cannot rely solely on process exit to detect disconnection. `OpenAutoManager.wait_for_projection_stopped()` monitors `autoapp`'s stderr asynchronously and raises `PhoneDisconnected` when a projection-stopped log pattern is detected (e.g., `"onAndroidAutoQuit"` or `"[WifiProjectionService] stop()"`). On receiving this event, the state machine sends SIGTERM to `autoapp` before re-launching the splash screen.
+
+**PROJECTION_ACTIVE asyncio.wait pattern (4 tasks):** The state machine waits on `exit_task` (process exit), `stopped_task` (projection-stopped log pattern), `ignition_task` (GPIO 17), and `clock_task` (`_periodic_clock_save()` — loops forever, saving `/data/clock` every 300 s). The first task to complete wins; all others are cancelled. In practice `clock_task` never completes first (it loops indefinitely) but is cancelled cleanly when another task fires.
 
 ### 3.7 ERROR_RECOVERY
 
@@ -207,7 +209,7 @@ stateDiagram-v2
 | PhoneDetected        | BlueZ RFCOMM Profile1 | A phone has connected to the WAA RFCOMM profile   |
 | CredentialsSent      | RFCOMM socket          | WiFi credentials exchanged via RFCOMM protobuf messages |
 | BtHandshakeFailed    | RFCOMM / Timer         | Pairing or RFCOMM credential exchange timed out or failed |
-| PhoneJoinedAP        | dnsmasq / hostapd      | A DHCP lease was assigned on the AP interface     |
+| PhoneJoinedAP        | NM lease file / ARP table (AP+STA) or dnsmasq DHCPACK (standalone) | A DHCP lease was assigned on the AP interface |
 | WifiTimeout          | Timer                  | Phone did not join AP within 30 seconds          |
 | OpenAutoReady        | OpenAuto (log parse)   | OpenAuto reports projection is active            |
 | OpenAutoFailed       | OpenAuto (exit code)   | OpenAuto exited with non-zero code or timed out  |
@@ -237,9 +239,10 @@ stateDiagram-v2
 | BOOTING timeout                   | 60 s             | Design       |
 | BOOTING → IDLE                    | 25 s             | PR-001       |
 | IDLE → PROJECTION_ACTIVE (total)  | 15 s (re-pair)   | PR-005       |
-| BT_PAIRING timeout                | 15 s             | Design       |
+| BT_PAIRING timeout                | 30 s             | `BT_PAIRING_TIMEOUT_S` (statemachine.py) |
 | WIFI_WAIT timeout                 | 30 s             | Design       |
 | TCP_CONNECT timeout (includes TLS + service discovery) | 30 s | Design |
 | ERROR_RECOVERY wait               | 5 s per retry    | Design       |
 | SHUTDOWN completion               | < 10 s           | Design       |
 | Ignition OFF → power loss         | 30 s (hardware)  | PiAuto-HW-001|
+| Clock save interval (PROJECTION_ACTIVE) | 300 s       | `CLOCK_SAVE_INTERVAL_S` (statemachine.py) |

@@ -219,7 +219,7 @@ EOF
 ### 4.4 Record Build Info
 
 ```bash
-echo "aasdk: $(cd /opt/aasdk && sudo git rev-parse HEAD)" | sudo tee /data/build-info.txt
+echo "aasdk: $(git -C /tmp/aasdk rev-parse HEAD 2>/dev/null || git -C /opt/aasdk rev-parse HEAD 2>/dev/null || echo unknown)" | sudo tee /data/build-info.txt
 echo "openauto: $(cd /opt/openauto && sudo git rev-parse HEAD)" | sudo tee -a /data/build-info.txt
 echo "build-date: $(date -Is)" | sudo tee -a /data/build-info.txt
 ```

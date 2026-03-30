@@ -77,7 +77,7 @@ piauto/
 ├── statemachine.py   # Central orchestrator (8 states)
 ├── ble.py            # BLE WAA advertising + RFCOMM credential exchange
 ├── bt_pair.py        # BR/EDR speaker discovery and pairing (dbus-next)
-├── wifi.py           # hostapd + dnsmasq AP management
+├── wifi.py           # WiFi AP management (NM-managed AP+STA or hostapd+dnsmasq standalone)
 ├── gpio.py           # Ignition sense + fan PWM (libgpiod)
 ├── thermal.py        # CPU temperature monitoring
 ├── config.py         # YAML config loader + validator
