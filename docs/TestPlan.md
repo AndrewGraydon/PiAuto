@@ -730,7 +730,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-031 | Power-Loss Resilience             | T      | Pending |            |       |
 | TC-032 | 12-Hour Soak Test                 | T      | Pending |            |       |
 | TC-033 | Config & Logging Inspection       | I      | Pass    | 2026-03-28 | Single YAML config, journald only, no log files |
-| TC-034 | BT Speaker Mid-Session Disconnect | T      | Pending |            |       |
+| TC-034 | BT Speaker Mid-Session Disconnect | T      | Pass    | 2026-03-29 | Speaker reconnected automatically after 5-10s power cycle. Volume restored higher than prior level — acceptable behaviour (BlueZ restores its own volume state, not PiAuto's) |
 | TC-035 | Clock Initialization (No RTC)     | T+I    | Pass    | 2026-03-28 | System time ahead of saved /data/clock after reboot; correct time restored |
 | TC-036 | BT_PAIRING Timeout                | T      | Pending |            |       |
 | TC-037 | TCP_CONNECT Timeout               | T      | Pending |            |       |
