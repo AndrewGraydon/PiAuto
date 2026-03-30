@@ -720,7 +720,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-021 | Auto-Boot on Power                | T      | Pass    | 2026-03-28 | piauto.service enabled, starts on boot |
 | TC-022 | Fan PWM Control                   | M      | Blocked |            | Fan not connected yet |
 | TC-023 | Splash Screen                     | D      | Pass    | 2026-03-28 | Status text shown, transitions to AA |
-| TC-024 | Night Mode Sensor                 | T      | Pending |            |       |
+| TC-024 | Night Mode Sensor                 | T      | Pass    | 2026-03-29 | Phone-controlled (FR-039). Toggling day/night in phone AA settings immediately updates display theme. No Pi-side sensor required. |
 | TC-025 | Read-Only Root & /data            | I+T    | Pending |            |       |
 | TC-026 | Boot Time                         | M      | Pass    | 2026-03-28 | BOOTING→IDLE in ~1s; systemd start to IDLE ~2s (req: <25s) |
 | TC-027 | Projection Latency                | M      | Pending |            | Requires camera setup |
