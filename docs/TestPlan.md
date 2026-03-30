@@ -712,7 +712,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-013 | Four Audio Streams                | D+I    | Pending |            |       |
 | TC-014 | Audio Focus / Ducking             | D      | Pass    | 2026-03-28 | Nav voice ducks music, music resumes after |
 | TC-015 | BT A2DP Audio Output              | D      | Pass    | 2026-03-28 | Audio on BT speaker, not HDMI |
-| TC-016 | BT Audio Auto-Reconnect           | T      | Pending |            |       |
+| TC-016 | BT Audio Auto-Reconnect           | T      | Pass    | 2026-03-29 | BlueZ persistent pairing handles reconnect natively across all power cycles during development |
 | TC-017 | Touch Event Path                  | T      | Pass    | 2026-03-29 | Touch-to-screen latency < 1s after GStreamer queue fix (was 3-8s) |
 | TC-018 | Multi-Touch                       | T      | Waived  | 2026-03-28 | HW supports 6-point MT; OpenAuto sends single-touch only (upstream limit). FR-031 (Should) waived as upstream constraint. |
 | TC-019 | Ignition Sense Detection          | M      | Blocked |            | GPIO 17 not wired yet |
