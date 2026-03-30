@@ -7,6 +7,9 @@ The AA protocol sends raw PCM audio with no volume control messages.
 The phone's volume buttons change its BT AVRCP volume (a side-effect
 of the WAA BT connection). This module polls that AVRCP value and
 maps it to the PipeWire default audio sink via wpctl.
+
+Uses dbus_next async API so D-Bus calls yield the event loop rather
+than blocking it (replaces the prior synchronous python-dbus approach).
 """
 
 from __future__ import annotations
@@ -28,17 +31,9 @@ class VolumeSyncManager:
         self._poll_task: asyncio.Task | None = None
         self._wpctl_proc: asyncio.subprocess.Process | None = None
         self._last_volumes: dict[str, int] = {}
-        self._dbus_available = False
-        try:
-            import dbus  # noqa: F401
-            self._dbus_available = True
-        except ImportError:
-            log.warning("python-dbus not available — volume sync disabled")
 
-    def start(self) -> None:
+    async def start(self) -> None:
         """Start the background volume sync task."""
-        if not self._dbus_available:
-            return
         if self._poll_task and not self._poll_task.done():
             return
         self._poll_task = asyncio.create_task(self._poll_loop())
@@ -57,43 +52,53 @@ class VolumeSyncManager:
 
     async def _poll_loop(self) -> None:
         """Poll AVRCP volumes and sync changes to PipeWire."""
-        import dbus
+        from dbus_next.aio import MessageBus
+        from dbus_next import BusType
+        from dbus_next.errors import DBusError
 
-        bus = dbus.SystemBus()
+        try:
+            bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+        except Exception as exc:
+            log.warning("Volume sync: cannot connect to D-Bus: %s", exc)
+            return
 
-        while True:
-            try:
-                transports = self._get_transports(bus)
-                for path, vol in transports.items():
-                    if vol >= 0 and self._last_volumes.get(path) != vol:
-                        linear = vol / 127.0
-                        log.info("AVRCP %s %d/127 → PipeWire %.2f", path, vol, linear)
-                        await self._set_pipewire_volume(linear)
-                        self._last_volumes[path] = vol
-            except dbus.exceptions.DBusException:
-                # BlueZ may be temporarily unavailable during reconnects
-                pass
-            except asyncio.CancelledError:
-                return
-            except Exception as exc:
-                log.debug("Volume sync error: %s", exc)
+        try:
+            while True:
+                try:
+                    transports = await self._get_transports(bus)
+                    for path, vol in transports.items():
+                        if vol >= 0 and self._last_volumes.get(path) != vol:
+                            linear = vol / 127.0
+                            log.info(
+                                "AVRCP %s %d/127 → PipeWire %.2f", path, vol, linear
+                            )
+                            await self._set_pipewire_volume(linear)
+                            self._last_volumes[path] = vol
+                except asyncio.CancelledError:
+                    raise
+                except DBusError:
+                    # BlueZ may be temporarily unavailable during reconnects
+                    pass
+                except Exception as exc:
+                    log.debug("Volume sync error: %s", exc)
 
-            await asyncio.sleep(_POLL_INTERVAL)
+                await asyncio.sleep(_POLL_INTERVAL)
+        finally:
+            bus.disconnect()
 
     @staticmethod
-    def _get_transports(bus) -> dict[str, int]:
+    async def _get_transports(bus) -> dict[str, int]:
         """Get all MediaTransport1 paths and their Volume values."""
-        import dbus
+        introspect = await bus.introspect("org.bluez", "/")
+        obj = bus.get_proxy_object("org.bluez", "/", introspect)
+        manager = obj.get_interface("org.freedesktop.DBus.ObjectManager")
+        managed = await manager.call_get_managed_objects()
 
-        manager = dbus.Interface(
-            bus.get_object("org.bluez", "/"),
-            "org.freedesktop.DBus.ObjectManager",
-        )
-        result = {}
-        for path, interfaces in manager.GetManagedObjects().items():
+        result: dict[str, int] = {}
+        for path, interfaces in managed.items():
             if "org.bluez.MediaTransport1" in interfaces:
-                vol = int(interfaces["org.bluez.MediaTransport1"].get("Volume", -1))
-                result[str(path)] = vol
+                vol = interfaces["org.bluez.MediaTransport1"].get("Volume")
+                result[str(path)] = int(vol.value) if vol is not None else -1
         return result
 
     async def _set_pipewire_volume(self, linear: float) -> None:

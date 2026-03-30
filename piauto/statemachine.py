@@ -478,7 +478,7 @@ class StateMachine:
 
         # Start AVRCP volume sync (phone volume → PipeWire)
         if self._volume:
-            self._volume.start()
+            await self._volume.start()
 
         # Wait for OpenAuto to exit, projection stopped, or ignition off.
         # The phone can disconnect without autoapp exiting — it stays running
