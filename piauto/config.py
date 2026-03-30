@@ -25,7 +25,7 @@ _MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 @dataclass
 class WifiConfig:
     ssid: str = "PiAuto"
-    password: str = "changeme1"
+    password: str = ""  # must be set explicitly in /data/piauto.yaml
     channel: int = 149
     country: str = "AU"
 
@@ -87,7 +87,10 @@ def _validate(cfg: PiAutoConfig) -> list[str]:
     if not (1 <= len(cfg.wifi.ssid) <= 32):
         errors.append(f"wifi.ssid length {len(cfg.wifi.ssid)} not in 1–32")
     if len(cfg.wifi.password) < 8:
-        errors.append(f"wifi.password too short ({len(cfg.wifi.password)} < 8)")
+        errors.append(
+            f"wifi.password too short ({len(cfg.wifi.password)} chars) — "
+            "set a password of at least 8 characters in /data/piauto.yaml"
+        )
     if cfg.wifi.channel not in (149, 165):
         errors.append(f"wifi.channel {cfg.wifi.channel} not in {{149, 165}}")
 
