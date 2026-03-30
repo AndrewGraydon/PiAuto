@@ -31,7 +31,7 @@ Pi ──BT A2DP──► Vehicle Speaker (audio output)
 - **Bluetooth audio output** — A2DP to vehicle speaker with 4 concurrent AA streams
 - **Ignition-sense power management** — clean boot/shutdown with vehicle ignition
 - **Thermal management** — PWM fan control with temperature-based profile
-- **Read-only root filesystem** — overlayfs protects against SD card corruption
+- **Power-loss resilient ext4** — journaling filesystem + BlueZ bind mount to `/data/` provides resilience without overlayfs
 - **Power-loss resilience** — clock saved every 5 min during projection (≤5 min stale on power cut); BlueZ pairing DB persisted to `/data/bluetooth/` via bind mount so phone/speaker survive unexpected power loss without re-pairing
 - **Graceful degradation** — develops and runs on non-Pi machines in mock mode
 
