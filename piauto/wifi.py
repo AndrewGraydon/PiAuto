@@ -23,8 +23,9 @@ from piauto.log import get_logger
 
 log = get_logger("wifi")
 
-HOSTAPD_CONF = Path("/tmp/hostapd.conf")
-DNSMASQ_CONF = Path("/tmp/dnsmasq.conf")
+_RUN_DIR = Path("/run/piauto")
+HOSTAPD_CONF = _RUN_DIR / "hostapd.conf"
+DNSMASQ_CONF = _RUN_DIR / "dnsmasq.conf"
 
 # Standalone AP mode (wlan0)
 _STANDALONE_INTERFACE = "wlan0"
@@ -114,6 +115,7 @@ class WifiManager:
 
     def _write_configs(self) -> None:
         """Generate hostapd and dnsmasq configuration files."""
+        _RUN_DIR.mkdir(parents=True, exist_ok=True)
         hostapd_conf = HOSTAPD_TEMPLATE.format(
             interface=self._interface,
             ssid=self._config.ssid,

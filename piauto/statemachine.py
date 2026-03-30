@@ -145,7 +145,10 @@ class StateMachine:
                 return
             except Exception:
                 log.exception("Unhandled error in state %s", self._state.value)
-                self._transition(State.SHUTDOWN, Event.BOOT_FAILED)
+                if self._state in (State.TCP_CONNECT, State.PROJECTION_ACTIVE):
+                    self._transition(State.ERROR_RECOVERY, Event.CONNECTION_LOST)
+                else:
+                    self._transition(State.SHUTDOWN, Event.BOOT_FAILED)
 
     # ── BOOTING ──────────────────────────────────────────────
 
