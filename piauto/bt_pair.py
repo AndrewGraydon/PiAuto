@@ -15,11 +15,24 @@ keeps the D-Bus connection alive for the full operation.
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
+
+from piauto.log import get_logger
+
+log = get_logger("bt_pair")
 
 # Audio device classes (Major Device Class = 0x04, bits 12-8)
 _AUDIO_MAJOR_CLASS = 0x04
 _AUDIO_CLASS_MASK = 0x1F00  # bits 12-8
+
+
+_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+# Named timing constants used in pair()
+_PAIR_WAIT_S = 1       # delay after pairing completes
+_PROFILE_CHECK_S = 1   # per-iteration wait when polling for A2DP endpoints
+_A2DP_SETTLE_S = 5     # wait for A2DP transport to stabilise after connect
 
 
 def _is_audio_device(device_class: int) -> bool:
@@ -50,9 +63,9 @@ async def scan(duration: float = 12.0) -> None:
         await adapter_iface.call_start_discovery()
 
         seen: set[str] = set()
-        end_time = asyncio.get_event_loop().time() + duration
+        end_time = asyncio.get_running_loop().time() + duration
 
-        while asyncio.get_event_loop().time() < end_time:
+        while asyncio.get_running_loop().time() < end_time:
             await asyncio.sleep(1.0)
 
             # Introspect adapter to find child device paths
@@ -81,7 +94,8 @@ async def scan(duration: float = 12.0) -> None:
 
                     seen.add(dev_path)
                     print(f"DEVICE|{mac}|{name}|{dev_class:#08x}", flush=True)
-                except Exception:
+                except Exception as exc:
+                    log.debug("Skipping %s: %s", dev_path, exc)
                     continue
 
         try:
@@ -208,7 +222,7 @@ async def pair(mac: str) -> None:
                 print(f"PAIR_FAIL|Pairing failed: {e}", flush=True)
                 return
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(_PAIR_WAIT_S)
 
         # Wait for A2DP endpoints to be registered by WirePlumber before
         # attempting connect. Without endpoints, connect fails with
@@ -228,7 +242,7 @@ async def pair(mac: str) -> None:
                     break
             except Exception:
                 pass
-            await asyncio.sleep(1)
+            await asyncio.sleep(_PROFILE_CHECK_S)
 
         # Connect (retry on profile-unavailable — WirePlumber may still be
         # registering A2DP endpoints after a service restart).
@@ -261,13 +275,13 @@ async def pair(mac: str) -> None:
         # Wait for A2DP profile to fully establish before releasing the
         # D-Bus session. Without this, BlueZ may drop the connection when
         # our client disconnects.
-        await asyncio.sleep(5)
+        await asyncio.sleep(_A2DP_SETTLE_S)
 
         connected_v = await props.call_get("org.bluez.Device1", "Connected")
         if connected_v.value:
             print(f"PAIR_OK|{mac}|{name}", flush=True)
             # Hold session open so BlueZ fully settles the A2DP transport
-            await asyncio.sleep(5)
+            await asyncio.sleep(_A2DP_SETTLE_S)
         else:
             print(f"PAIR_FAIL|Connection not established", flush=True)
 
@@ -286,7 +300,11 @@ if __name__ == "__main__":
     if cmd == "scan":
         asyncio.run(scan())
     elif cmd == "pair" and len(sys.argv) >= 3:
-        asyncio.run(pair(sys.argv[2]))
+        mac_arg = sys.argv[2]
+        if not _MAC_RE.match(mac_arg):
+            print(f"Invalid MAC address: {mac_arg}", file=sys.stderr)
+            sys.exit(1)
+        asyncio.run(pair(mac_arg))
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         sys.exit(1)

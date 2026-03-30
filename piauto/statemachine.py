@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import enum
 import os
-import subprocess
 import time
 
 from piauto.ble import BleManager, PhoneInfo
@@ -270,22 +269,14 @@ class StateMachine:
         if setup_task in done:
             # Wait for other tasks to actually cancel before reading from
             # splash stdout in _handle_bt_setup (avoids concurrent readers)
-            for task in pending:
-                try:
-                    await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
-                except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
-                    pass
+            await asyncio.gather(*pending, return_exceptions=True)
             log.info("Setup requested — launching BT speaker pairing UI")
             await self._ble.stop_advertising()
             await self._handle_bt_setup()
             return
 
         # Wait for cancelled tasks to release resources (especially splash stdout)
-        for task in pending:
-            try:
-                await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
-                pass
+        await asyncio.gather(*pending, return_exceptions=True)
 
         try:
             phone = phone_task.result()
@@ -321,7 +312,7 @@ class StateMachine:
                     log.info("BT speaker paired: %s (%s)", name, mac)
 
         # Return to IDLE
-        self._transition(State.IDLE, Event.SERVICES_STARTED)
+        self._transition(State.IDLE, Event.PHONE_DISCONNECTED)
 
     # ── BT_PAIRING ───────────────────────────────────────────
 
@@ -412,7 +403,13 @@ class StateMachine:
             self._transition(State.SHUTDOWN, Event.IGNITION_OFF)
             return
 
-        if client_task.result():
+        try:
+            client_joined = client_task.result()
+        except Exception as exc:
+            log.error("AP client wait failed: %s", exc)
+            client_joined = False
+
+        if client_joined:
             # Phone is on AP — autoapp already running and listening
             self._transition(State.TCP_CONNECT, Event.PHONE_JOINED_AP)
         else:
@@ -625,7 +622,12 @@ class StateMachine:
         else:
             log.info("Shutdown complete — issuing system halt")
             try:
-                subprocess.run(["shutdown", "-h", "now"], check=False)
+                proc = await asyncio.create_subprocess_exec(
+                    "shutdown", "-h", "now",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
             except FileNotFoundError:
                 log.info("'shutdown' not available (dev machine?) — exiting normally")
 

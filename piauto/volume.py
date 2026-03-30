@@ -26,6 +26,7 @@ class VolumeSyncManager:
 
     def __init__(self) -> None:
         self._poll_task: asyncio.Task | None = None
+        self._wpctl_proc: asyncio.subprocess.Process | None = None
         self._last_volumes: dict[str, int] = {}
         self._dbus_available = False
         try:
@@ -95,16 +96,18 @@ class VolumeSyncManager:
                 result[str(path)] = vol
         return result
 
-    @staticmethod
-    async def _set_pipewire_volume(linear: float) -> None:
+    async def _set_pipewire_volume(self, linear: float) -> None:
         """Set PipeWire default sink volume via wpctl."""
+        # Skip if a previous wpctl invocation is still running
+        if self._wpctl_proc is not None and self._wpctl_proc.returncode is None:
+            return
         try:
-            proc = await asyncio.create_subprocess_exec(
+            self._wpctl_proc = await asyncio.create_subprocess_exec(
                 "wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{linear:.3f}",
                 env={"XDG_RUNTIME_DIR": "/run/user/1000"},
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await proc.wait()
+            await self._wpctl_proc.wait()
         except FileNotFoundError:
             log.debug("wpctl not found")

@@ -110,6 +110,7 @@ class OpenAutoManager:
         self._projection_active = asyncio.Event()
         self._projection_stopped = asyncio.Event()
         self._monitor_task: asyncio.Task | None = None
+        self._stdout_task: asyncio.Task | None = None
 
     async def launch(self) -> bool:
         """Launch OpenAuto as a subprocess. Returns True if started successfully."""

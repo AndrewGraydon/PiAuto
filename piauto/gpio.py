@@ -102,7 +102,7 @@ class GpioManager:
 
         while self._running:
             # Wait for edge event with a timeout so we can check self._running
-            ready = await asyncio.get_event_loop().run_in_executor(
+            ready = await asyncio.get_running_loop().run_in_executor(
                 None,
                 lambda: self._ignition_request.wait_edge_events(timeout=1.0),
             )

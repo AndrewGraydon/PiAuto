@@ -645,7 +645,7 @@ class BleManager:
         )
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             success = await loop.run_in_executor(None, self._rfcomm_exchange, fd)
             return success
         except Exception as exc:
