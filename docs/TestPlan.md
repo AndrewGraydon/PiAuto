@@ -728,7 +728,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-028 | Video Frame Rate                  | M      | Pending |            |       |
 | TC-029 | Audio Latency                     | M      | Pending |            | Requires recording equipment |
 | TC-030 | Connection Setup Time             | M      | Fail    | 2026-03-28 | PhoneDetected→PROJECTION_ACTIVE 16s (req: <15s); WiFi join adds ~4s delay |
-| TC-031 | Power-Loss Resilience             | T      | Pending |            | Procedure updated: verify BlueZ bind mount, no re-pairing required, clock ≤5 min stale |
+| TC-031 | Power-Loss Resilience             | T      | Partial | 2026-03-29 | Clean reboot verified: BlueZ bind mount active, no re-pairing, WiFi AP restored, piauto active. Unclean power-cut test (mid-session pull) still pending. |
 | TC-032 | 12-Hour Soak Test                 | T      | Pending |            |       |
 | TC-033 | Config & Logging Inspection       | I      | Pass    | 2026-03-28 | Single YAML config, journald only, no log files |
 | TC-034 | BT Speaker Mid-Session Disconnect | T      | Pass    | 2026-03-29 | Speaker reconnected automatically after 5-10s power cycle. Volume restored higher than prior level — acceptable behaviour (BlueZ restores its own volume state, not PiAuto's) |
@@ -751,7 +751,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-051 | VideoWidget Frame Rendering       | D      | Pass    | 2026-03-29 | 800×480 AA stream rendered at 1024×600 display (scaled correctly by VideoWidget) |
 | TC-052 | Full Projection — New Binary E2E  | D      | Pass    | 2026-03-29 | Video, audio, touch all working; touch latency < 1s confirmed |
 | TC-053 | Software Fallback Decoder         | T      | Pending |            | Optional — defer |
-| TC-054 | WiFi AP Recovery After Reboot     | T      | Pending |            |       |
+| TC-054 | WiFi AP Recovery After Reboot     | T      | Pass    | 2026-03-29 | uap0 AP active, piauto-wifi service active, AA reconnected without re-pairing after reboot |
 | TC-055 | Display Geometry Verification     | M      | Pass    | 2026-03-29 | VideoWidget confirmed 1024×600 via /tmp/vw_geom.txt; AA stream 800×480 |
 | TC-056 | EGLFS Window Stacking             | T      | Pass    | 2026-03-29 | MainWindow hidden on projection start; journal confirms "Hid window: QMainWindow" |
 
