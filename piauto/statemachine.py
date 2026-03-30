@@ -77,6 +77,7 @@ WIFI_WAIT_TIMEOUT_S = 30
 TCP_CONNECT_TIMEOUT_S = 30
 ERROR_RECOVERY_WAIT_S = 5
 MAX_RETRIES = 3
+CLOCK_SAVE_INTERVAL_S = 300  # save clock every 5 min during projection
 
 
 class StateMachine:
@@ -457,6 +458,20 @@ class StateMachine:
 
     # ── PROJECTION_ACTIVE ────────────────────────────────────
 
+    async def _periodic_clock_save(self) -> None:
+        """Save system time to /data/clock every CLOCK_SAVE_INTERVAL_S seconds.
+
+        Runs as a background task during PROJECTION_ACTIVE so that an
+        unexpected power loss (e.g. car battery disconnect) leaves the clock
+        file no more than 5 minutes stale. Without this, the clock file only
+        updates on a clean shutdown, meaning a mid-session power cut could
+        leave the Pi booting with a clock that is hours behind.
+        """
+        while True:
+            await asyncio.sleep(CLOCK_SAVE_INTERVAL_S)
+            save_time()
+            log.debug("Clock saved (periodic)")
+
     async def _handle_projection_active(self) -> None:
         """PROJECTION_ACTIVE: Monitor OpenAuto process. SM-001 §3.6."""
         log.info("=== PROJECTION_ACTIVE ===")
@@ -474,9 +489,10 @@ class StateMachine:
             self._openauto.wait_for_projection_stopped()
         )
         ignition_task = asyncio.create_task(self._ignition_off.wait())
+        clock_task = asyncio.create_task(self._periodic_clock_save())
 
         done, pending = await asyncio.wait(
-            [exit_task, stopped_task, ignition_task],
+            [exit_task, stopped_task, ignition_task, clock_task],
             return_when=asyncio.FIRST_COMPLETED,
         )
 
