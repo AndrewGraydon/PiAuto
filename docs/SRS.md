@@ -15,7 +15,7 @@ This document defines the software requirements for PiAuto, a standalone Wireles
 
 ### 1.2 Scope
 
-PiAuto is a prototype automotive head unit that wirelessly mirrors an Android phone's Android Auto interface onto a 7-inch touchscreen display. The system handles Bluetooth Low Energy discovery, Wi-Fi access point management, Android Auto protocol negotiation (via OpenAuto / aasdk), H.264 video decoding, concurrent audio streaming over Bluetooth A2DP to a vehicle speaker, and capacitive touch input.
+PiAuto is a prototype automotive head unit that wirelessly mirrors an Android phone's Android Auto interface onto a 7-inch 1024×600 touchscreen display. The system handles Bluetooth Low Energy discovery, Wi-Fi access point management, Android Auto protocol negotiation (via OpenAuto / aasdk), H.264 video decoding, concurrent audio streaming over Bluetooth A2DP to a vehicle speaker, and capacitive touch input.
 
 **In scope:**
 
@@ -126,7 +126,7 @@ Audio is routed from the Pi over Bluetooth A2DP to a vehicle speaker (or speaker
 | :----- | :----------------------------------------------------------------------------------------------------------- | :------- |
 | FR-016 | The system shall decode incoming H.264 Baseline Profile video using the Pi 4's hardware V4L2 decoder.       | Must     |
 | FR-017 | Decoded video shall be rendered to the display via Qt EGLFS (direct KMS/DRM, no X11 or Wayland compositor). | Must     |
-| FR-018 | The video pipeline shall support the display's native resolution of 800×480 at 30 FPS.                      | Must     |
+| FR-018 | The video pipeline shall support the AA stream resolution of 800×480 (480p mode) at 30 FPS. Note: 800×480 is the Android Auto protocol stream resolution, not the physical display resolution. The physical display is 1024×600 native; the VideoWidget scales the 800×480 AA stream to fill the display. | Must     |
 | FR-019 | The system shall negotiate 800×480 resolution and 30 FPS with the phone during AA service discovery, with a maximum bitrate of 4,000 kbps. | Must |
 
 ### 3.5 Audio
@@ -224,7 +224,7 @@ Audio is routed from the Pi over Bluetooth A2DP to a vehicle speaker (or speaker
 | :----- | :----------------------------------------------------------------------------------------------------------- | :----------------- |
 | PR-001 | Total boot-to-IDLE time (power applied to splash screen displayed) shall be less than 25 seconds.            | < 25 s             |
 | PR-002 | End-to-end projection latency (phone render to Pi display) shall not exceed 200 ms.                          | ≤ 200 ms           |
-| PR-003 | Video decoding shall sustain 30 FPS (the maximum supported at 800×480 per the AA protocol).                  | 30 FPS             |
+| PR-003 | Video decoding shall sustain 30 FPS (the maximum supported by the AA protocol at the 800×480 stream resolution). | 30 FPS             |
 | PR-004 | Audio output latency (AA stream to BT speaker) shall not exceed 100 ms.                                      | ≤ 100 ms           |
 | PR-005 | Time from BT detection to PROJECTION_ACTIVE shall not exceed 15 seconds for a previously paired phone.       | ≤ 15 s             |
 
@@ -261,13 +261,13 @@ Audio is routed from the Pi over Bluetooth A2DP to a vehicle speaker (or speaker
 | ID   | Constraint                                                                                  |
 | :--- | :------------------------------------------------------------------------------------------ |
 | C-001| Target hardware is Raspberry Pi 4 Model B (4 GB RAM).                                      |
-| C-002| Display is a 7-inch 800×480 HDMI display with USB capacitive touch (LCDWiki 7inch HDMI Display-B). |
+| C-002| Display is a 7-inch HDMI display with USB capacitive touch (LCDWiki 7inch HDMI Display-B). The physical display native resolution is 1024×600. The Android Auto protocol streams video at 800×480 (480p mode); the VideoWidget scales this to fill the display. |
 | C-003| Operating system shall be Raspberry Pi OS Lite (Trixie, 64-bit) with no desktop environment. |
 | C-004| The Android Auto protocol shall be handled by OpenAuto built on the aasdk library.          |
 | C-005| OpenAuto shall render via Qt EGLFS (direct KMS/DRM) — no X11 or Wayland compositor.        |
 | C-006| Orchestration and application code shall be written in Python 3.11+.                        |
 | C-007| Audio subsystem shall be PipeWire.                                                          |
-| C-008| Video resolution is limited to 800×480 at 30 FPS maximum (AA protocol constraint at this resolution). |
+| C-008| The Android Auto video stream resolution is limited to 800×480 at 30 FPS maximum (AA protocol 480p mode constraint). The physical display renders at 1024×600 native resolution; the VideoWidget scales the 800×480 AA stream to fill the display. |
 
 ---
 

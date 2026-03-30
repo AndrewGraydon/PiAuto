@@ -39,7 +39,7 @@ Pi ──BT A2DP──► Vehicle Speaker (audio output)
 | Component | Specification |
 | :-------- | :------------ |
 | Board | Raspberry Pi 4 Model B (4 GB) |
-| Display | 7" HDMI Display (1024x600, USB capacitive touch) |
+| Display | 7" HDMI Display (1024×600 native, USB capacitive touch — wch.cn USB2IIC_CTP_CONTROL) |
 | OS | Raspberry Pi OS Lite, Trixie, 64-bit |
 | Audio | Bluetooth A2DP to vehicle speaker |
 | Power | 5.1 V via vehicle buck converter, GPIO 17 ignition sense |
@@ -203,14 +203,13 @@ This is a prototype/hobbyist project. The full specification suite is complete a
 - Bluetooth speaker discovery and pairing (BR/EDR via dbus-next, with touchscreen UI)
 - 4 concurrent AA audio streams (media, guidance, system, telephony) via PipeWire → BT A2DP
 - AVRCP volume sync (phone volume rocker → PipeWire → BT speaker)
-- WiFi AP+STA on single radio (concurrent AP for phone and infrastructure WiFi for SSH)
+- WiFi AP+STA on single radio (concurrent AP for phone and infrastructure WiFi for SSH), managed by NetworkManager
 - Splash screen with status display and BT Setup UI
 - State machine orchestration with full error recovery and retry logic
 - Configurable logging (journald on Pi, stderr on dev) via `PIAUTO_LOG_LEVEL`
-
-**Pending verification (new binary built, awaiting test run):**
-- Audio stutter fix — RtAudio mutex (OpenDsh PR #32) incorporated into `AndrewGraydon/openauto`
-- GSTVideoOutput rewrite — plain GStreamer C API replacing removed qt-gstreamer, enabling correct H.264 rendering on EGLFS
+- GSTVideoOutput rewrite — plain GStreamer C API (no qt-gstreamer); leaky post-decoder queue eliminates touch-to-screen latency; 30 FPS QTimer paint loop decouples decode from Qt event queue
+- Audio stutter fix — RtAudio static mutex (OpenDsh PR #32) eliminates concurrent buffer access race
+- Touch double-tap fix — libinput disabled (`QT_QPA_EGLFS_NO_LIBINPUT=1`), evdevtouch with exclusive grab used instead
 
 **Known issues:**
 - Phone occasionally reconnects to house WiFi instead of PiAuto AP after idle period

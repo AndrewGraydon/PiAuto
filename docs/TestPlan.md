@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-TP-001                |
-| Version        | 4.0                          |
-| Date           | 2026-03-28                   |
+| Version        | 4.1                          |
+| Date           | 2026-03-29                   |
 | Status         | Active                       |
 
 ## 1. Introduction
@@ -164,8 +164,8 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-016, FR-017, FR-018, FR-019                          |
 | Method       | D                                                       |
 | Precondition | PROJECTION_ACTIVE, phone running AA with Maps or media  |
-| Procedure    | 1. Observe AA UI on 7" display. 2. Verify rendering fills the 800×480 display. 3. Verify no tearing, corruption, or blank frames. 4. Verify no X11 or Wayland is running (`ps aux | grep -E 'Xorg|wayland'`). |
-| Pass Criteria| AA UI renders correctly at 800×480 via Qt EGLFS. Video is smooth at 30 FPS. No compositor running. |
+| Procedure    | 1. Observe AA UI on 7" display. 2. Verify rendering fills the display with no black bars. 3. Verify no tearing, corruption, or blank frames. 4. Verify no X11 or Wayland is running (`ps aux | grep -E 'Xorg|wayland'`). |
+| Pass Criteria| AA video (800×480 stream) renders scaled to 1024×600 display. Video smooth at 30 FPS. No compositor running. |
 
 ---
 
@@ -198,8 +198,8 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-024                                                  |
 | Method       | D                                                       |
 | Precondition | PROJECTION_ACTIVE, music playing, BT speaker connected  |
-| Procedure    | 1. Play music. 2. Trigger navigation prompt — verify music volume drops (~20%). 3. Make a phone call — verify music mutes entirely. 4. End call — verify music resumes. |
-| Pass Criteria| Ducking and muting behavior matches AA audio focus protocol (GAIN_TRANSIENT_MAY_DUCK for nav, GAIN for telephony). |
+| Procedure    | 1. Play music. 2. Trigger navigation prompt — verify music volume drops noticeably. 3. Make a phone call — verify music mutes entirely. 4. End call — verify music resumes. |
+| Pass Criteria| Music stream volume drops noticeably during guidance. Music resumes at original volume after guidance ends. Audio focus protocol is respected (no permanent ducking). Ducking and muting behavior matches AA audio focus protocol (GAIN_TRANSIENT_MAY_DUCK for nav, GAIN for telephony). |
 
 ### TC-015: BT A2DP Audio Output
 
@@ -244,6 +244,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | Precondition | PROJECTION_ACTIVE, Maps open                            |
 | Procedure    | 1. Pinch-to-zoom on Google Maps. 2. Verify map zooms in/out. |
 | Pass Criteria| Pinch-to-zoom gesture recognized. Map responds correctly. |
+| Note         | Accepted limitation — OpenAuto upstream protocol sends single-touch events only; FR-031 (Should) is waived as an upstream constraint. Multi-touch hardware (6-point) is available and reported correctly by the touch driver. |
 
 ---
 
@@ -365,7 +366,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | Method       | M                                                       |
 | Precondition | PROJECTION_ACTIVE, Maps or video content                |
 | Procedure    | 1. Enable V4L2 decode stats or OpenAuto frame counter. 2. Measure FPS over 60-second window. |
-| Pass Criteria| Sustained 30 FPS (the AA protocol maximum at 800×480).  |
+| Pass Criteria| Sustained 30 FPS (the AA protocol maximum at 800×480 stream resolution, displayed on 1024×600 display). |
 
 ### TC-029: Audio Latency
 
@@ -514,7 +515,7 @@ This document defines the verification approach for every requirement in PiAuto-
 
 | Field        | Value                                                   |
 | :----------- | :------------------------------------------------------ |
-| Traces to    | FR-045, FR-046                                          |
+| Traces to    | FR-049                                                  |
 | Method       | D                                                       |
 | Precondition | System in IDLE, BT speaker in pairing mode, no speaker previously paired |
 | Procedure    | 1. Tap "Setup" button on splash screen. 2. Verify BT setup UI appears. 3. Tap "Scan" — verify speaker appears in device list. 4. Tap the speaker entry — verify pairing succeeds (green confirmation). 5. Tap "Back" — verify return to idle splash. 6. Connect phone and play music — verify audio on newly paired speaker. |
@@ -637,8 +638,8 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-017, Implementation §2.4 (Patch #4)                 |
 | Method       | D                                                       |
 | Precondition | PROJECTION_ACTIVE with AndrewGraydon/openauto binary    |
-| Procedure    | 1. Connect phone. 2. Verify AA UI renders on 7" display. 3. Verify video fills 800×480 area correctly (no black bars, no overscan, no undersized frame). 4. Verify touch input works (single tap activates AA buttons). 5. Verify no visual tearing or dropped frames. |
-| Pass Criteria| AA video renders at correct size and aspect ratio. Touch works on first tap. No tearing. Display matches screen bounds. |
+| Procedure    | 1. Connect phone. 2. Verify AA UI renders on 7" display. 3. Verify video fills display correctly (no black bars, no overscan, no undersized frame). 4. Verify touch input works (single tap activates AA buttons). 5. Verify no visual tearing or dropped frames. |
+| Pass Criteria| 800×480 AA stream rendered at 1024×600 display (scaled correctly by VideoWidget). Touch works on first tap. No tearing. Display matches screen bounds. |
 
 ### TC-052: Full Projection Session — New Binary End-to-End
 
@@ -659,6 +660,36 @@ This document defines the verification approach for every requirement in PiAuto-
 | Precondition | openauto binary built with `-DGST_BUILD=TRUE`           |
 | Procedure    | 1. Temporarily unload v4l2 decoder: `rmmod bcm2835-v4l2` (or confirm `v4l2h264dec` unavailable). 2. Start autoapp and connect phone. 3. Verify log shows `avdec_h264` selected as fallback. 4. Verify video renders (slower/higher CPU but functional). 5. Reload driver. |
 | Pass Criteria| avdec_h264 fallback activates when v4l2h264dec unavailable. Video still renders (functional, not performance pass). |
+
+### TC-054: WiFi AP Recovery After Reboot
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-006, FR-007, NR-001                                  |
+| Method       | T                                                       |
+| Precondition | PiAuto running, uap0 AP active, phone connected to PiAuto AP |
+| Procedure    | 1. Force system reboot: `sudo reboot`. 2. Wait for Pi to complete boot (observe splash screen). 3. On phone, wait up to 60 s — verify PiAuto AP (SSID "PiAuto") reappears in WiFi list. 4. Check Pi: `systemctl status piauto-wifi` — verify service reports success. 5. Reconnect phone and verify AA projection resumes. |
+| Pass Criteria| PiAuto AP visible within 60 s of boot. piauto-wifi.service reports success. AA projection resumes on reconnect. |
+
+### TC-055: Display Geometry Verification
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-017, FR-018, C-002                                   |
+| Method       | M                                                       |
+| Precondition | PROJECTION_ACTIVE, video rendering on display           |
+| Procedure    | 1. SSH to Pi. 2. Run: `cat /tmp/vw_geom.txt` (VideoWidget geometry written at startup). 3. Verify output is `1024x600` or matches physical display. 4. Visually confirm AA video fills the full screen with no black bars and no content cut off. 5. Verify AA stream resolution in autoapp log: look for "Video: 800x480" or similar GSTVideoOutput log line. |
+| Pass Criteria| VideoWidget geometry = physical display resolution (1024×600). AA stream decoded at 800×480 and scaled to fill display. No black bars or overscan visible. |
+
+### TC-056: EGLFS Window Stacking on Projection Start
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-017, FR-023                                          |
+| Method       | T                                                       |
+| Precondition | IDLE state, splash screen visible                       |
+| Procedure    | 1. Connect phone — transition to PROJECTION_ACTIVE. 2. Verify splash screen disappears entirely (no partial overlay). 3. Verify AA video fills full screen. 4. Check journal: `journalctl -u piauto | grep "Hid window"` — verify MainWindow was hidden. 5. Disconnect phone — verify splash returns. 6. Reconnect — verify AA video appears again (no stale splash overlay). |
+| Pass Criteria| Splash hidden when projection starts. AA video fullscreen with no window overlap. Journal shows "Hid window: QMainWindow". Splash returns cleanly on disconnect. |
 
 ---
 
@@ -683,7 +714,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-015 | BT A2DP Audio Output              | D      | Pass    | 2026-03-28 | Audio on BT speaker, not HDMI |
 | TC-016 | BT Audio Auto-Reconnect           | T      | Pending |            |       |
 | TC-017 | Touch Event Path                  | T      | Pass    | 2026-03-29 | Touch-to-screen latency < 1s after GStreamer queue fix (was 3-8s) |
-| TC-018 | Multi-Touch                       | T      | Fail    | 2026-03-28 | HW supports 6-point MT; OpenAuto sends single-touch only (upstream limit) |
+| TC-018 | Multi-Touch                       | T      | Waived  | 2026-03-28 | HW supports 6-point MT; OpenAuto sends single-touch only (upstream limit). FR-031 (Should) waived as upstream constraint. |
 | TC-019 | Ignition Sense Detection          | M      | Blocked |            | GPIO 17 not wired yet |
 | TC-020 | Clean Shutdown                    | M      | Blocked |            | Requires ignition GPIO |
 | TC-021 | Auto-Boot on Power                | T      | Pass    | 2026-03-28 | piauto.service enabled, starts on boot |
@@ -695,7 +726,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-027 | Projection Latency                | M      | Pending |            | Requires camera setup |
 | TC-028 | Video Frame Rate                  | M      | Pending |            |       |
 | TC-029 | Audio Latency                     | M      | Pending |            | Requires recording equipment |
-| TC-030 | Connection Setup Time             | M      | Partial | 2026-03-28 | PhoneDetected→PROJECTION_ACTIVE 16s (req: <15s); WiFi join adds ~4s delay |
+| TC-030 | Connection Setup Time             | M      | Fail    | 2026-03-28 | PhoneDetected→PROJECTION_ACTIVE 16s (req: <15s); WiFi join adds ~4s delay |
 | TC-031 | Power-Loss Resilience             | T      | Pending |            |       |
 | TC-032 | 12-Hour Soak Test                 | T      | Pending |            |       |
 | TC-033 | Config & Logging Inspection       | I      | Pass    | 2026-03-28 | Single YAML config, journald only, no log files |
@@ -714,11 +745,14 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-046 | aasdk Build (OpenSSL 3.x)         | I      | Pass    | 2026-03-29 | Built clean on Debian 13 against OpenSSL 3.x |
 | TC-047 | openauto Build (GSTVideoOutput)   | I      | Pass    | 2026-03-29 | Built with -DGST_BUILD=TRUE; GStreamer linked |
 | TC-048 | GStreamer Pipeline Init           | T      | Pass    | 2026-03-29 | VideoService start + start indication logged; no pipeline errors |
-| TC-049 | Audio Stutter Regression          | D      | Pending |            | Play music + trigger Gemini/Assistant repeatedly |
+| TC-049 | Audio Stutter Regression          | D      | Pass    | 2026-03-29 | Static mutex fix (PR #32) built and deployed 2026-03-29. Music + Gemini concurrent trigger — no stutter observed. KI-001 resolved. |
 | TC-050 | HW H.264 Decoder (v4l2h264dec)    | T      | Pending |            | Check autoapp logs for decoder selection |
-| TC-051 | VideoWidget Frame Rendering       | D      | Pass    | 2026-03-29 | Full screen Maps + Spotify rendering correctly at 1024x600 |
+| TC-051 | VideoWidget Frame Rendering       | D      | Pass    | 2026-03-29 | 800×480 AA stream rendered at 1024×600 display (scaled correctly by VideoWidget) |
 | TC-052 | Full Projection — New Binary E2E  | D      | Pass    | 2026-03-29 | Video, audio, touch all working; touch latency < 1s confirmed |
 | TC-053 | Software Fallback Decoder         | T      | Pending |            | Optional — defer |
+| TC-054 | WiFi AP Recovery After Reboot     | T      | Pending |            |       |
+| TC-055 | Display Geometry Verification     | M      | Pass    | 2026-03-29 | VideoWidget confirmed 1024×600 via /tmp/vw_geom.txt; AA stream 800×480 |
+| TC-056 | EGLFS Window Stacking             | T      | Pass    | 2026-03-29 | MainWindow hidden on projection start; journal confirms "Hid window: QMainWindow" |
 
 ---
 
@@ -726,7 +760,8 @@ This document defines the verification approach for every requirement in PiAuto-
 
 | ID | Summary | Severity | Root Cause | Status |
 | :- | :------ | :------- | :--------- | :----- |
-| KI-001 | Audio stutter when notifications or Gemini trigger during music playback | Medium | RtAudio race condition — three audio stream instances (media, guidance, system) concurrently access shared RtAudio buffers without synchronization. | Pending build verification — `AndrewGraydon/openauto` piauto-debian13 branch incorporates OpenDsh PR #32 static mutex fix. Verify with TC-049 after Pi build. |
+| KI-001 | Audio stutter when notifications or Gemini trigger during music playback | Medium | RtAudio race condition — three audio stream instances (media, guidance, system) concurrently access shared RtAudio buffers without synchronization. | **Closed 2026-03-29** — RtAudio static mutex fix (PR #32) verified via TC-049. |
 | KI-002 | Video sizing and touch input broken with QtVideoOutput path on EGLFS | High | `QtVideoOutput` (QMediaPlayer + QVideoWidget) cannot render raw H.264 NAL units on EGLFS. | **Closed 2026-03-29** — `GSTVideoOutput` rewrite verified working. Full screen video rendering confirmed (TC-011, TC-051, TC-052). |
 | KI-003 | Phone occasionally reconnects to house WiFi instead of PiAuto AP | Low | After WiFi toggle or extended idle, phone's WiFi auto-join prioritizes known networks over PiAuto AP. Usually resolves after BT disconnect/reconnect cycle triggers fresh credential exchange. | Intermittent — workaround is BT reconnect cycle. |
-| KI-004 | Connection setup time slightly exceeds 15s target | Low | PhoneDetected → PROJECTION_ACTIVE measured at 16s. WiFi join adds ~4s delay when phone must switch from house WiFi to PiAuto AP. | TC-030 partial pass. |
+| KI-004 | Connection setup time slightly exceeds 15s target | Low | PhoneDetected → PROJECTION_ACTIVE measured at 16s. WiFi join adds ~4s delay when phone must switch from house WiFi to PiAuto AP. | Superseded by KI-005. |
+| KI-005 | Connection setup time 16s exceeds 15s target (PR-005) | Low | WiFi join (~4s) when phone must switch from house WiFi to PiAuto AP. When phone is already on PiAuto AP, time is within target. | Accepted — intermittent condition only when phone must switch networks. TC-030 Fail. |
