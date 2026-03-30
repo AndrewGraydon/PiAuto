@@ -285,9 +285,32 @@ sudo mkdir -p /data/bt        # BLE pairing records
 sudo mkdir -p /data/tls       # TLS certificates (generated on first boot)
 ```
 
+### 6.2.1 BlueZ Pairing Persistence
+
+Under overlayfs (read-only root), BlueZ writes its pairing database to `/var/lib/bluetooth/`. Those writes go to the RAM overlay and are lost on any unexpected power cut, forcing re-pairing of the phone and speaker on every unclean shutdown.
+
+To fix this, bind-mount `/data/bluetooth/` over `/var/lib/bluetooth/` so BlueZ's writes go to the persistent `/data` partition:
+
+```bash
+sudo mkdir -p /data/bluetooth
+sudo cp -a /var/lib/bluetooth/. /data/bluetooth/
+```
+
+Add to `/etc/fstab`:
+
+```
+/data/bluetooth  /var/lib/bluetooth  none  bind  0  0
+```
+
+> **Important:** Run `cp -a /var/lib/bluetooth/.` **before** enabling overlayfs and before the bind mount takes effect. This copies any existing pairing records (phone, speaker) to `/data/bluetooth/`. If the directory is empty when BlueZ starts, all pairings are lost and re-pairing is required. Pairs established after the bind mount is active are stored directly on `/data/` and survive power loss.
+
+> **Important:** This step must be done before enabling overlayfs (§6.3). Once overlayfs is active, changes to `/var/lib/bluetooth/` are volatile unless the bind mount is in place.
+
 ### 6.3 Read-Only Root Filesystem (overlayfs)
 
 > **Important:** Configure this LAST, after all other setup is complete. Once enabled, changes to `/` are volatile.
+
+> **Prerequisite:** The BlueZ bind mount (§6.2.1) must be configured and the `/etc/fstab` entry added before enabling overlayfs. Without it, BlueZ's pairing database will be written to the RAM overlay and lost on every power cycle.
 
 ```bash
 sudo raspi-config
@@ -822,3 +845,4 @@ journalctl -t piauto -f
 | Audio stutter on notifications/Gemini | RtAudio race condition | Fixed in `AndrewGraydon/openauto` piauto-debian13 branch via OpenDsh PR #32 static mutex. Rebuild per §4.2 with `-DGST_BUILD=ON`. |
 | No video or wrong video size on EGLFS | Built without `-DGST_BUILD=ON` | Rebuild per §4.2 with `-DGST_BUILD=ON`. Rollback: `sudo cp /usr/local/bin/autoapp-2026.03.28+git.4cc739b /usr/local/bin/autoapp`. |
 | GStreamer pipeline fails to start | Missing gstreamer plugins | Run: `apt install gstreamer1.0-plugins-bad gstreamer1.0-libav`. Check: `gst-inspect-1.0 h264parse`. |
+| After overlayfs setup, phone/speaker requires re-pairing on every boot | BlueZ bind mount not configured | Check fstab (`grep bluetooth /etc/fstab`) and verify `/data/bluetooth/` is populated. Run `mount \| grep bluetooth` — if not mounted, the bind mount is missing. See §6.2.1. |

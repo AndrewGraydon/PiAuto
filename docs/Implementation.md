@@ -431,6 +431,65 @@ fi
 
 ---
 
+## 11.3 Periodic Clock Save During Projection
+
+**Problem:** `save_time()` was only called on clean shutdown. A mid-session power cut left `/data/clock` with the timestamp from the previous clean shutdown — potentially hours behind the actual time. On next boot, `restore_time()` would set the system clock to that stale value, which could cause TLS handshake failures if the clock predates any peer certificate's `notBefore` date.
+
+**Solution:** A `_periodic_clock_save()` coroutine in `statemachine.py` loops: sleep `CLOCK_SAVE_INTERVAL_S` seconds, call `save_time()`, log debug. It runs as a fourth `asyncio.Task` alongside `exit_task`, `stopped_task`, and `ignition_task` during PROJECTION_ACTIVE, grouped in a single `asyncio.wait(return_when=FIRST_COMPLETED)` call. When any other task completes (disconnect, ignition off), the `clock_task` is cancelled as part of the standard pending-task cleanup.
+
+| Constant | Value | Location |
+| :------- | :---- | :------- |
+| `CLOCK_SAVE_INTERVAL_S` | 300 | `statemachine.py` line ~80 |
+
+After this change, the clock file is at most 5 minutes stale after a power cut (down from hours).
+
+**PROJECTION_ACTIVE asyncio.wait pattern (4 tasks):**
+
+```python
+exit_task    = asyncio.create_task(self._openauto.wait_for_exit())
+stopped_task = asyncio.create_task(self._openauto.wait_for_projection_stopped())
+ignition_task = asyncio.create_task(self._ignition_off.wait())
+clock_task   = asyncio.create_task(self._periodic_clock_save())
+
+done, pending = await asyncio.wait(
+    [exit_task, stopped_task, ignition_task, clock_task],
+    return_when=asyncio.FIRST_COMPLETED,
+)
+for task in pending:
+    task.cancel()
+```
+
+`clock_task` never completes first in practice (it loops indefinitely). It is cancelled cleanly when one of the other three tasks fires.
+
+---
+
+## 11.4 BlueZ Pairing Persistence (Bind Mount)
+
+**Problem:** Under overlayfs (read-only root), BlueZ writes its pairing database to `/var/lib/bluetooth/`. These writes go to the RAM overlay and are discarded on power cut. Every unexpected shutdown forces re-pairing of the phone and Bluetooth speaker.
+
+**Solution:** Bind-mount `/data/bluetooth/` over `/var/lib/bluetooth/` so BlueZ's writes go directly to the persistent `/data` partition.
+
+**One-time setup (after initial pairing, before enabling overlayfs):**
+
+```bash
+sudo mkdir -p /data/bluetooth
+sudo cp -a /var/lib/bluetooth/. /data/bluetooth/
+```
+
+Add to `/etc/fstab`:
+
+```
+/data/bluetooth  /var/lib/bluetooth  none  bind  0  0
+```
+
+**Important:** Copy the existing BlueZ database before the bind mount takes effect, or all current pairings will be lost. This step must be completed before enabling overlayfs (see PiSetup §6.3). After a reboot, verify with:
+
+```bash
+mount | grep bluetooth
+```
+
+---
+
 ## 12. Country Code / Regulatory Domain
 
 The 5 GHz WiFi channel selection depends on the regulatory domain. The system must set the country code for hostapd.

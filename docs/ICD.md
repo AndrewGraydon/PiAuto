@@ -53,6 +53,7 @@ This ICD covers:
 | IF-09 | Ignition Sense                 | GPIO         | Vehicle → GPIO 17             | FR-032 to FR-034|
 | IF-10 | Fan Control                    | GPIO PWM     | GPIO 4 → Fan                  | FR-035          |
 | IF-11 | Orchestrator ↔ Child Processes | D-Bus / Process | piauto-main ↔ all services | All             |
+| IF-12 | Persistent Storage             | Filesystem (/data) | piauto-main ↔ SD card    | FR-042 to FR-045|
 
 ---
 
@@ -659,3 +660,41 @@ OpenAuto reads its configuration from `/data/openauto.ini` (resolution, FPS, aud
 | 1         | Connection lost (unexpected TCP/TLS loss) | Transition to ERROR_RECOVERY |
 | 2         | Internal error             | Transition to ERROR_RECOVERY |
 | SIGTERM   | Killed by state machine (shutdown) | Expected — no action |
+
+---
+
+## 14. IF-12: Persistent Storage (/data Partition)
+
+### 14.1 Overview
+
+The `/data` partition (ext4, read-write) is the only persistent writable storage on the system. All state that must survive power loss is stored here. The root filesystem (`/`) is read-only under overlayfs; all other writes are discarded on reboot.
+
+### 14.2 Persistent Paths
+
+| Path | Owner | Description |
+| :--- | :---- | :---------- |
+| `/data/piauto.yaml` | piauto-main | Runtime configuration (SSID, channel, thresholds, etc.) |
+| `/data/tls/cert.pem` | piauto-main | Self-signed TLS certificate (generated at first boot) |
+| `/data/tls/key.pem` | piauto-main | TLS private key (mode 0600) |
+| `/data/bt/` | piauto-main | BLE pairing records (phone MACs, device names) |
+| `/data/clock` | piauto-main | Saved epoch timestamp for clock restore on boot (no RTC). Updated on clean shutdown and every 5 minutes during PROJECTION_ACTIVE. |
+| `/data/bluetooth/` | bluetoothd (via bind mount) | BlueZ pairing database. Bind-mounted to `/var/lib/bluetooth/` so BlueZ writes survive power loss under overlayfs. |
+| `/data/openauto.ini` | piauto-main | OpenAuto configuration (resolution, FPS, audio backend) |
+| `/data/eglfs.json` | piauto-main | Qt EGLFS KMS display configuration |
+| `/data/build-info.txt` | build script | Pinned aasdk/openauto commit hashes and build date |
+
+### 14.3 Clock File
+
+The `/data/clock` file stores a Unix epoch timestamp. On boot, `piauto.clock.restore_time()` reads this value and sets the system clock. On clean shutdown, `save_time()` writes the current epoch.
+
+**Periodic save during projection:** `_periodic_clock_save()` in `statemachine.py` saves the clock every `CLOCK_SAVE_INTERVAL_S = 300` seconds during PROJECTION_ACTIVE. This limits clock staleness after a power cut to ≤5 minutes (previously, an unexpected power cut could leave the clock file hours stale, potentially causing TLS cert date validation failures on the next boot).
+
+### 14.4 BlueZ Bind Mount
+
+Under overlayfs, BlueZ's writes to `/var/lib/bluetooth/` go to the RAM overlay and are lost on power cut. A bind mount configured in `/etc/fstab` redirects these writes to the persistent `/data/bluetooth/` directory:
+
+```
+/data/bluetooth  /var/lib/bluetooth  none  bind  0  0
+```
+
+Without this bind mount, every unexpected power cut forces re-pairing of the phone and Bluetooth speaker. The bind mount must be set up before enabling overlayfs (see PiSetup §6.2.1).

@@ -332,9 +332,9 @@ This document defines the verification approach for every requirement in PiAuto-
 | :----------- | :------------------------------------------------------ |
 | Traces to    | FR-044, FR-045                                          |
 | Method       | I + T                                                   |
-| Precondition | System booted                                           |
-| Procedure    | 1. Run `mount | grep " / "` — verify `ro` or overlayfs. 2. Attempt `touch /test` — verify ephemeral. 3. Write to `/data/test` — verify persists across reboot. 4. Pull power without shutdown. 5. Boot and verify intact. |
-| Pass Criteria| Root is read-only. `/data` writable and persistent. No corruption after power-pull. |
+| Precondition | BlueZ bind mount configured (`/data/bluetooth/ → /var/lib/bluetooth/`, per PiSetup §6.2.1). System booted with overlayfs enabled. |
+| Procedure    | 1. Run `mount \| grep " / "` — verify `ro` or overlayfs. 2. Attempt `touch /test` — verify ephemeral. 3. Write to `/data/test` — verify persists across reboot. 4. Verify bind mount: `mount \| grep bluetooth`. 5. Pull power without shutdown. 6. Boot and verify `/data` intact and BlueZ pairing DB present in `/data/bluetooth/`. |
+| Pass Criteria| Root is read-only. `/data` writable and persistent. No corruption after power-pull. BlueZ bind mount active and pairing DB preserved. |
 
 ---
 
@@ -396,8 +396,9 @@ This document defines the verification approach for every requirement in PiAuto-
 | :----------- | :------------------------------------------------------ |
 | Traces to    | NR-002                                                  |
 | Method       | T                                                       |
-| Procedure    | 1. During PROJECTION_ACTIVE, pull power cable. 2. Restore power. 3. Verify clean boot. 4. Verify pairing records intact. 5. Repeat 5 times. |
-| Pass Criteria| Clean boot all 5 times. No corruption. Pairing records intact. |
+| Precondition | BlueZ bind mount configured (`/data/bluetooth/ → /var/lib/bluetooth/`). Phone and BT speaker previously paired. |
+| Procedure    | 1. Verify bind mount active: `mount \| grep bluetooth` — confirm `/data/bluetooth` mounted on `/var/lib/bluetooth`. 2. Enter PROJECTION_ACTIVE (music playing, phone connected). 3. Pull power cable. 4. Restore power. 5. Verify clean boot and splash screen appears. 6. Verify phone reconnects WITHOUT re-pairing (auto-reconnect only). 7. Verify BT speaker reconnects WITHOUT re-pairing. 8. Check `/data/clock` timestamp is within 5 minutes of actual time at power cut. 9. Repeat steps 2–8 five times. |
+| Pass Criteria| Clean boot all 5 times. No SD card corruption. BlueZ pairing DB intact — phone and speaker reconnect without re-pairing. Clock restored within ≤5 min of actual time at power cut. |
 
 ### TC-032: 12-Hour Soak Test
 
@@ -727,7 +728,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-028 | Video Frame Rate                  | M      | Pending |            |       |
 | TC-029 | Audio Latency                     | M      | Pending |            | Requires recording equipment |
 | TC-030 | Connection Setup Time             | M      | Fail    | 2026-03-28 | PhoneDetected→PROJECTION_ACTIVE 16s (req: <15s); WiFi join adds ~4s delay |
-| TC-031 | Power-Loss Resilience             | T      | Pending |            |       |
+| TC-031 | Power-Loss Resilience             | T      | Pending |            | Procedure updated: verify BlueZ bind mount, no re-pairing required, clock ≤5 min stale |
 | TC-032 | 12-Hour Soak Test                 | T      | Pending |            |       |
 | TC-033 | Config & Logging Inspection       | I      | Pass    | 2026-03-28 | Single YAML config, journald only, no log files |
 | TC-034 | BT Speaker Mid-Session Disconnect | T      | Pass    | 2026-03-29 | Speaker reconnected automatically after 5-10s power cycle. Volume restored higher than prior level — acceptable behaviour (BlueZ restores its own volume state, not PiAuto's) |

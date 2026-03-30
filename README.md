@@ -32,6 +32,7 @@ Pi ──BT A2DP──► Vehicle Speaker (audio output)
 - **Ignition-sense power management** — clean boot/shutdown with vehicle ignition
 - **Thermal management** — PWM fan control with temperature-based profile
 - **Read-only root filesystem** — overlayfs protects against SD card corruption
+- **Power-loss resilience** — clock saved every 5 min during projection (≤5 min stale on power cut); BlueZ pairing DB persisted to `/data/bluetooth/` via bind mount so phone/speaker survive unexpected power loss without re-pairing
 - **Graceful degradation** — develops and runs on non-Pi machines in mock mode
 
 ## Hardware
@@ -213,6 +214,8 @@ This is a prototype/hobbyist project. The full specification suite is complete a
 
 **Known issues:**
 - Phone occasionally reconnects to house WiFi instead of PiAuto AP after idle period
+
+**Setup note:** Full power-loss resilience requires the BlueZ bind mount to be configured (`/data/bluetooth/ → /var/lib/bluetooth/`). See [Pi Setup Guide §6](docs/PiSetup.md) for the exact commands. Without this, an unexpected power cut will force re-pairing of phone and speaker on next boot.
 
 See [Known Issues](docs/TestPlan.md#27-known-issues) for full details.
 

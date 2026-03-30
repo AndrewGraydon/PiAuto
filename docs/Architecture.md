@@ -297,7 +297,7 @@ All processes except `piauto-main` are managed as systemd services. `piauto-main
 2. **IDLE:** `piauto-main` advertises BLE, launches splash Qt process (single long-lived process with `QStackedWidget` for view switching). User can tap "Setup" to enter BT speaker pairing without restarting the process.
 3. **BT_PAIRING → WIFI_WAIT:** `piauto-main` starts `hostapd` + `dnsmasq`.
 4. **TCP_CONNECT:** `piauto-main` kills the splash process (releases DRM master), launches `openauto` (Qt EGLFS). OpenAuto takes over the display and listens on TCP 5000.
-5. **PROJECTION_ACTIVE:** OpenAuto handles everything. `piauto-main` monitors OpenAuto's process and GPIO 17.
+5. **PROJECTION_ACTIVE:** OpenAuto handles everything. `piauto-main` monitors OpenAuto's process and GPIO 17. A background `_periodic_clock_save()` task also runs, saving the current time to `/data/clock` every 5 minutes so that an unexpected power cut leaves the clock file at most 5 minutes stale.
 6. **Disconnect:** OpenAuto exits. `piauto-main` reclaims the display (relaunches splash), stops `hostapd`, returns to IDLE.
 7. **Shutdown:** `piauto-main` kills all child processes, runs `shutdown -h now`.
 
@@ -319,6 +319,31 @@ All processes except `piauto-main` are managed as systemd services. `piauto-main
 | mmcblk0p1 | /boot    | FAT32      | 512 MB | Kernel, DTB, config.txt, cmdline.txt |
 | mmcblk0p2 | /        | ext4 (ro)  | ~14 GB | Root filesystem (read-only)        |
 | mmcblk0p3 | /data    | ext4 (rw)  | ~1 GB  | Pairing records, piauto.yaml       |
+
+### 7.3 Data Partition Layout and Persistence
+
+The `/data` partition is the sole writable, persistent storage on the system. Its contents:
+
+| Path | Purpose |
+| :--- | :------ |
+| `/data/piauto.yaml` | Runtime configuration |
+| `/data/tls/` | Self-signed TLS cert and key (generated on first boot) |
+| `/data/bt/` | BLE pairing records (managed by PiAuto) |
+| `/data/clock` | Saved epoch timestamp for clock restore on boot (no RTC) |
+| `/data/bluetooth/` | BlueZ pairing database (bind-mounted to `/var/lib/bluetooth/`) |
+| `/data/openauto.ini` | OpenAuto configuration |
+| `/data/eglfs.json` | Qt EGLFS KMS display configuration |
+| `/data/build-info.txt` | Pinned aasdk/openauto commit hashes |
+
+**Clock file (`/data/clock`):** Updated on every clean shutdown and also every 5 minutes during PROJECTION_ACTIVE (via `_periodic_clock_save()`). This ensures that after an unexpected power cut, the restored clock is at most 5 minutes stale — down from potentially hours stale with shutdown-only saves. A stale clock could cause TLS handshake failures if it predates the cert's `notBefore` date.
+
+**BlueZ bind mount (`/data/bluetooth/` → `/var/lib/bluetooth/`):** Under overlayfs, BlueZ's writes to `/var/lib/bluetooth/` go to the RAM overlay and are lost on power cut. A bind mount redirects those writes to `/data/bluetooth/` on the persistent partition. Without this, every unexpected power cut forces re-pairing of both the phone and the BT speaker. The bind mount is configured in `/etc/fstab`:
+
+```
+/data/bluetooth  /var/lib/bluetooth  none  bind  0  0
+```
+
+This must be set up before enabling overlayfs (see PiSetup §6).
 
 ### 7.3 Display Configuration (config.txt)
 
