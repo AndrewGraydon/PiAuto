@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-TP-001                |
-| Version        | 4.2                          |
-| Date           | 2026-03-29                   |
+| Version        | 4.3                          |
+| Date           | 2026-04-04                   |
 | Status         | Active                       |
 
 ## 1. Introduction
@@ -92,8 +92,8 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-005, NR-004                                          |
 | Method       | D                                                       |
 | Precondition | Phone previously paired and connected successfully       |
-| Procedure    | 1. Reboot Pi. 2. Ensure phone BT and WiFi are ON, in range. 3. Wait for Pi to reach IDLE. 4. Observe automatic connection without any user interaction. |
-| Pass Criteria| System automatically connects and reaches PROJECTION_ACTIVE without user interaction. |
+| Procedure    | 1. Reboot Pi. 2. Ensure phone BT and WiFi are ON, in range, Android Auto app installed. 3. Wait for Pi to reach IDLE. 4. Observe Pi pages phone via Classic BT (`journalctl -u piauto` shows "Auto-reconnect: paging last known phone"). 5. Observe phone Android Auto launches automatically and system reaches PROJECTION_ACTIVE without any user interaction. |
+| Pass Criteria| System automatically connects and reaches PROJECTION_ACTIVE without user interaction. Journal shows "Auto-reconnect: paging last known phone" in IDLE. |
 
 ---
 
@@ -695,6 +695,18 @@ This document defines the verification approach for every requirement in PiAuto-
 
 ---
 
+### TC-057: Classic BT Auto-Reconnect on Boot
+
+| Field        | Value                                                   |
+| :----------- | :------------------------------------------------------ |
+| Traces to    | FR-005, NR-004                                          |
+| Method       | T                                                       |
+| Precondition | Phone previously paired. Phone screen off, Android Auto app not open. |
+| Procedure    | 1. Ensure phone BT and WiFi are ON but AA app not in foreground. 2. Power cycle Pi. 3. Monitor `journalctl -u piauto -f`. 4. Verify "Auto-reconnect: paging last known phone" log appears in IDLE. 5. Verify Android Auto launches on phone automatically without user opening the app. 6. Verify system reaches PROJECTION_ACTIVE. |
+| Pass Criteria| Journal shows "Auto-reconnect: paging last known phone XX:XX:XX:XX:XX:XX". Android Auto launches on phone without user interaction. PROJECTION_ACTIVE reached. |
+
+---
+
 ## 26. Test Execution Checklist
 
 | TC ID  | Description                       | Method | Status  | Date       | Notes |
@@ -703,7 +715,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-002 | BLE Pairing & Handshake           | D      | Pass    | 2026-03-28 | RFCOMM NewConnection received, IDLE → BT_PAIRING |
 | TC-003 | WifiStartRequest Delivery         | T      | Pass    | 2026-03-28 | Credentials exchanged, state → WIFI_WAIT |
 | TC-004 | Pairing Record Persistence        | T      | Pass    | 2026-03-28 | Pairing survives reboot; phone re-paired after clean wipe |
-| TC-005 | Auto-Reconnect                    | D      | Pass    | 2026-03-28 | Phone auto-connects via BLE/RFCOMM after reboot, no user action needed |
+| TC-005 | Auto-Reconnect                    | D      | Pending |            | Re-test with Classic BT page implementation (TC-057) |
 | TC-006 | AP Configuration                  | T      | Partial | 2026-03-28 | NM AP on uap0 works; channel 48 (2.4 GHz) not matching config channel 149 (5 GHz) |
 | TC-007 | DHCP Lease Assignment             | T      | Pass    | 2026-03-28 | Phone received IP on AP subnet |
 | TC-008 | TCP Listen Port 5000              | T      | Pass    | 2026-03-28 | Verified via `ss -tlnH` during BT_PAIRING |
@@ -755,6 +767,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-054 | WiFi AP Recovery After Reboot     | T      | Pass    | 2026-03-29 | uap0 AP active, piauto-wifi service active, AA reconnected without re-pairing after reboot |
 | TC-055 | Display Geometry Verification     | M      | Pass    | 2026-03-29 | VideoWidget confirmed 1024×600 via /tmp/vw_geom.txt; AA stream 800×480 |
 | TC-056 | EGLFS Window Stacking             | T      | Pass    | 2026-03-29 | MainWindow hidden on projection start; journal confirms "Hid window: QMainWindow" |
+| TC-057 | Classic BT Auto-Reconnect         | T      | Pending |            | Pi pages last known phone on IDLE entry; Android Auto should launch without user action |
 
 ---
 

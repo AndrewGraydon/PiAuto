@@ -22,7 +22,7 @@ Pi ──BT A2DP──► Vehicle Speaker (audio output)
 ## Features
 
 - **Wireless Android Auto** — no USB cable required
-- **Auto-reconnect** — previously paired phones connect automatically on boot
+- **Auto-reconnect** — Pi pages previously paired phones on boot (OEM-style Classic BT reconnect); Android Auto launches automatically without user interaction
 - **Multi-phone pairing** — stores up to 8 paired devices
 - **Touchscreen BT speaker setup** — on-screen UI for discovering and pairing Bluetooth speakers
 - **WiFi AP+STA** — simultaneous access point (for phone) and station (for SSH/internet) on one radio
@@ -200,7 +200,7 @@ This is a prototype/hobbyist project. The full specification suite is complete a
 
 **Working:**
 - Full wireless Android Auto projection (BLE discovery → WiFi → TCP/TLS → video + audio)
-- Auto-reconnect — previously paired phones connect automatically on boot
+- Auto-reconnect — Pi pages last paired phone on boot (OEM-style Classic BT); Android Auto launches without user interaction
 - Bluetooth speaker discovery and pairing (BR/EDR via dbus-next, with touchscreen UI)
 - 4 concurrent AA audio streams (media, guidance, system, telephony) via PipeWire → BT A2DP
 - AVRCP volume sync (phone volume rocker → PipeWire → BT speaker)

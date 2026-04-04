@@ -3,7 +3,7 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-IG-001                |
-| Version        | 1.2                          |
+| Version        | 1.3                          |
 | Date           | 2026-03-29                   |
 | Status         | Draft                        |
 
@@ -667,6 +667,45 @@ When either pattern is detected, the state machine:
 - The method reads `autoapp`'s stderr line-by-line asynchronously; it does not poll — it streams.
 - The exact log patterns may vary across OpenAuto builds. The pattern list should be updated in the build notes after verifying against the pinned OpenAuto commit (see §2.3).
 - If `autoapp` exits on its own (exit code 0 or 1) before `wait_for_projection_stopped()` fires, the existing exit-code logic takes precedence and the task is cancelled.
+
+---
+
+## 20. Phone Auto-Reconnect on Boot (OEM-Style)
+
+### 20.1 Problem
+
+PiAuto registers a WAA RFCOMM **server** profile — it waits for the phone to initiate the RFCOMM connection. Android does not auto-connect to SPP/RFCOMM profiles the way it auto-connects audio profiles (HFP, A2DP). As a result, the phone did not connect automatically on Pi boot; the user had to manually open BT settings and tap "Connect".
+
+### 20.2 How OEM Head Units Work
+
+OEM head units send a Classic BT **page** (connection request) to previously paired phones immediately on power-on. The phone accepts the ACL link. Android Auto on the phone detects that a known paired head unit has become reachable and automatically initiates the RFCOMM session to the head unit's WAA profile. The user sees Android Auto launch on their phone without any interaction.
+
+### 20.3 Fix: `BleManager.try_reconnect_phone()`
+
+After `start_advertising()` in IDLE, the state machine fires a background task:
+
+```python
+last_mac = self._ble.get_last_connected_mac()
+if last_mac:
+    asyncio.create_task(self._ble.try_reconnect_phone(last_mac))
+```
+
+`try_reconnect_phone()` calls BlueZ `Device1.Connect()` on the last known phone's device path:
+
+```python
+await asyncio.wait_for(dev_iface.call_connect(), timeout=15.0)
+```
+
+This sends a BT page to the phone. The phone accepts the ACL link. Even if no outbound profiles connect (the Pi is the RFCOMM server, not a client), the ACL connection is enough to trigger Android Auto to initiate the RFCOMM session back to the Pi's registered WAA profile. `Profile1.NewConnection` fires, `wait_for_phone()` picks up the fd from the queue, and the normal IDLE → BT_PAIRING transition proceeds.
+
+### 20.4 Failure Handling
+
+- Phone not in range: `call_connect()` times out after 15 s. Logged at DEBUG level. BLE advertising continues as fallback.
+- Phone not in BlueZ cache (never paired): device path introspection fails. Logged at DEBUG. No action.
+- Phone rejects: exception logged at DEBUG. BLE advertising continues.
+- No previously paired phone: `get_last_connected_mac()` returns `None`. Task not created.
+
+The reconnect task runs concurrently with `asyncio.wait` for phone/ignition/setup events. A failure does not affect normal operation.
 
 ---
 
