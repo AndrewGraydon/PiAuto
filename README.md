@@ -200,7 +200,8 @@ This is a prototype/hobbyist project. The full specification suite is complete a
 
 **Working:**
 - Full wireless Android Auto projection (BLE discovery → WiFi → TCP/TLS → video + audio)
-- Auto-reconnect — Pi pages last paired phone on boot (OEM-style Classic BT); Android Auto launches without user interaction
+- Auto-reconnect — HFP Hands-Free profile triggers Android's car mode; AA launches in <2s on boot, retries every 30s if phone was off; no user interaction required
+- Return to splash on AA disconnect — four independent signals (TCP session end ~3s, RFCOMM retry, WiFi AP leave, BlueZ BT disconnect) ensure the splash screen returns promptly regardless of disconnect method
 - Bluetooth speaker discovery and pairing (BR/EDR via dbus-next, with touchscreen UI)
 - 4 concurrent AA audio streams (media, guidance, system, telephony) via PipeWire → BT A2DP
 - AVRCP volume sync (phone volume rocker → PipeWire → BT speaker)

@@ -3,7 +3,7 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-SM-001                |
-| Version        | 3.4                          |
+| Version        | 3.5                          |
 | Date           | 2026-04-04                   |
 | Status         | Draft                        |
 
@@ -157,19 +157,30 @@ stateDiagram-v2
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | OpenAuto is streaming video to display and audio to PipeWire. Touch input forwarding is active. Start AVRCP volume sync (poll BlueZ MediaTransport1.Volume, map to PipeWire default sink via wpctl). Start `wait_for_projection_stopped()` monitoring task on OpenAutoManager. Start `_periodic_clock_save()` background task (saves `/data/clock` every `CLOCK_SAVE_INTERVAL_S` = 300 s so power-loss leaves clock ≤5 min stale). |
-| Exit Actions   | Stop AVRCP volume sync. Cancel `wait_for_projection_stopped()` task. Cancel `_periodic_clock_save()` task. |
+| Entry Actions  | OpenAuto is streaming video to display and audio to PipeWire. Touch input forwarding is active. Start AVRCP volume sync (poll BlueZ MediaTransport1.Volume, map to PipeWire default sink via wpctl). Start four disconnect-detection tasks: `wait_for_tcp_session_end()` (polls `ss` on port 5000 every 3 s — primary signal), `wait_for_rfcomm_reconnect_attempt()` (phone sends new RFCOMM on in-app disconnect), `wait_for_client_leave_ap()` (ARP poll on uap0 every 3 s), `wait_for_phone_disconnect()` (BlueZ Connected=False D-Bus signal). Also start `wait_for_projection_stopped()` (OpenAuto stdout patterns) and `_periodic_clock_save()` (saves `/data/clock` every 300 s). |
+| Exit Actions   | Stop AVRCP volume sync. Cancel all detection and monitoring tasks. Kill autoapp (SIGTERM). Re-launch splash screen. |
 | Satisfies      | FR-016 to FR-031, FR-038, FR-039, PR-002, PR-003, PR-004     |
 
 | Event              | Guard                    | Target State      | Actions                      |
 | :----------------- | :----------------------- | :---------------- | :--------------------------- |
 | ConnectionLost     | OpenAuto exited with code 1 | ERROR_RECOVERY | Log reason, preserve retry count |
-| PhoneDisconnected  | OpenAuto exited with code 0, **or** projection-stopped log pattern detected | IDLE | Kill autoapp (if still running). Restart splash screen app. |
+| PhoneDisconnected  | Any of: TCP session ended, RFCOMM reconnect attempt, phone left WiFi AP, BlueZ BT disconnect, OpenAuto exited code 0, projection-stopped log pattern | IDLE | Kill autoapp. Restart splash screen. |
 | IgnitionOff        | —                        | SHUTDOWN          | —                            |
 
-**Note on autoapp non-exit behavior:** When the phone ends an AA session, `autoapp` does **not** exit — it remains running and displays its own waiting screen. The state machine therefore cannot rely solely on process exit to detect disconnection. `OpenAutoManager.wait_for_projection_stopped()` monitors `autoapp`'s stderr asynchronously and raises `PhoneDisconnected` when a projection-stopped log pattern is detected (e.g., `"onAndroidAutoQuit"` or `"[WifiProjectionService] stop()"`). On receiving this event, the state machine sends SIGTERM to `autoapp` before re-launching the splash screen.
+**Phone disconnect detection (multi-signal):** When the phone ends an AA session, `autoapp` does **not** exit and stdout patterns are not reliable across all disconnect paths. Four independent signals are monitored concurrently; whichever fires first wins:
 
-**PROJECTION_ACTIVE asyncio.wait pattern (4 tasks):** The state machine waits on `exit_task` (process exit), `stopped_task` (projection-stopped log pattern), `ignition_task` (GPIO 17), and `clock_task` (`_periodic_clock_save()` — loops forever, saving `/data/clock` every 300 s). The first task to complete wins; all others are cancelled. In practice `clock_task` never completes first (it loops indefinitely) but is cancelled cleanly when another task fires.
+| Signal | Method | Latency | Scenario |
+| :----- | :----- | :------ | :------- |
+| TCP session end | `ss -tn src :5000` poll every 3 s | ~3 s | In-app AA disconnect (phone drops TCP but stays BT+WiFi connected) |
+| RFCOMM reconnect attempt | New connection on RFCOMM queue | ~13 s | In-app disconnect — Android retries RFCOMM periodically |
+| WiFi AP leave | ARP/neighbour table poll on uap0 every 3 s | ~3 s | Phone leaves AP (range loss, BT settings disconnect) |
+| BlueZ BT disconnect | `org.freedesktop.DBus.Properties` signal | seconds–minutes | Phone BT disconnect or reboot |
+
+OpenAuto stdout patterns and process exit are retained as additional fallbacks.
+
+**PROJECTION_ACTIVE asyncio.wait pattern (8 tasks):** `exit_task`, `stopped_task`, `ignition_task`, `clock_task`, `tcp_end_task`, `rfcomm_task`, `bt_disconnect_task`, `wifi_leave_task`. First task to complete wins; all others are cancelled.
+
+**IDLE reconnect retry loop:** On entering IDLE, a background `_reconnect_loop` task calls `try_reconnect_phone()` immediately, then every 30 s. This ensures the Pi pages the phone as soon as it comes back into BT range after being off — not just once on IDLE entry.
 
 ### 3.7 ERROR_RECOVERY
 

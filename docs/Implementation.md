@@ -642,31 +642,51 @@ env={
 
 ## 18. Phone Disconnect — Return to Splash
 
-### 18.1 Problem: autoapp Does Not Exit on Phone Disconnect
+### 18.1 Problem: No Single Reliable Disconnect Signal
 
-When the phone disconnects from an active Android Auto session, `autoapp` (OpenAuto) does **not** exit. It remains running and displays its own internal waiting screen. This means the state machine's existing mechanism of watching for process exit (exit code 0 → `PhoneDisconnected`) does not fire — the system stays in PROJECTION_ACTIVE indefinitely.
+When the phone ends an AA session, `autoapp` does **not** exit — it stays running showing its own waiting screen. No single signal reliably covers all disconnect scenarios:
 
-### 18.2 Fix: Watch for Projection-Stopped Log Patterns
+- **In-app AA disconnect** (phone stays BT+WiFi connected): no stdout pattern, no process exit, no BT disconnect, phone stays on AP — only TCP session drop and subsequent RFCOMM retry are detectable.
+- **Phone reboot / BT settings disconnect**: BT Connected=False fires, but may be delayed by BT timeout (minutes).
+- **Range loss**: phone eventually leaves the WiFi AP (ARP table clears).
 
-`OpenAutoManager` exposes a `wait_for_projection_stopped()` async method that monitors `autoapp`'s stderr in a background task. It searches for known log patterns that indicate the AA session has ended:
+### 18.2 Fix: Four Independent Disconnect Signals
 
-| Log Pattern | Source |
-| :---------- | :----- |
-| `onAndroidAutoQuit` | OpenAuto AA session lifecycle callback |
-| `[WifiProjectionService] stop()` | aasdk WifiProjectionService teardown |
+`_handle_projection_active()` races eight asyncio tasks; whichever fires first causes the transition to IDLE:
 
-When either pattern is detected, the state machine:
+**Primary signals (fastest):**
 
-1. Sends SIGTERM to `autoapp` (killing the lingering process).
-2. Re-launches the splash screen (which reacquires DRM master).
-3. Transitions to IDLE, resetting for the next connection.
+1. **`wait_for_tcp_session_end()`** (`openauto.py`): polls `ss -tn src :5000` every 3 s. Fires within ~3 s when autoapp's TCP session to the phone drops. This is the fastest and most reliable signal for in-app AA disconnects.
 
-### 18.3 Implementation Notes
+2. **`wait_for_rfcomm_reconnect_attempt()`** (`ble.py`): blocks on the RFCOMM connection queue. When the user disconnects AA in-app, Android immediately starts retrying RFCOMM connections (~every 13 s). The first new RFCOMM fd is closed and the task returns — IDLE will consume the next one.
 
-- `wait_for_projection_stopped()` runs as an `asyncio.Task` started on entry to PROJECTION_ACTIVE and cancelled on exit.
-- The method reads `autoapp`'s stderr line-by-line asynchronously; it does not poll — it streams.
-- The exact log patterns may vary across OpenAuto builds. The pattern list should be updated in the build notes after verifying against the pinned OpenAuto commit (see §2.3).
-- If `autoapp` exits on its own (exit code 0 or 1) before `wait_for_projection_stopped()` fires, the existing exit-code logic takes precedence and the task is cancelled.
+3. **`wait_for_client_leave_ap()`** (`wifi.py`): polls the `uap0` ARP/neighbour table every 3 s. First confirms the client IS present (avoids false-positive on startup), then fires when no clients remain. Covers range loss and BT-settings disconnect.
+
+4. **`wait_for_phone_disconnect()`** (`ble.py`): subscribes to `org.freedesktop.DBus.Properties` signals on the phone's BlueZ Device1 object. Fires when `Connected` goes `False`. Slowest (BT timeout can be minutes) but catches hard disconnects.
+
+**Fallback signals:**
+
+5. **`wait_for_projection_stopped()`** (`openauto.py`): streams autoapp stdout/stderr for known patterns (`onAndroidAutoQuit`, `[WifiProjectionService] stop()`, etc.).
+
+6. **`wait_for_exit()`** (`openauto.py`): autoapp process exit (exit code 0 = clean disconnect, non-zero → ERROR_RECOVERY).
+
+7. **`ignition_task`**: GPIO 17 ignition-off → SHUTDOWN.
+
+8. **`clock_task`**: `_periodic_clock_save()` — loops forever, never fires first.
+
+### 18.3 IDLE Reconnect Retry Loop
+
+On entering IDLE, a `_reconnect_loop` background task calls `try_reconnect_phone()` immediately, then every 30 s:
+
+```python
+async def _reconnect_loop(mac: str) -> None:
+    while True:
+        await self._ble.try_reconnect_phone(mac)
+        await asyncio.sleep(30)
+asyncio.create_task(_reconnect_loop(last_mac))
+```
+
+This ensures the Pi pages the phone as soon as it comes back into BT range (e.g. after a phone reboot), rather than relying solely on the phone picking up the BLE advertisement. The task is cancelled automatically when `phone_task` fires and `asyncio.wait` returns.
 
 ---
 

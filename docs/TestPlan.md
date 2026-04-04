@@ -534,8 +534,8 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-038, SM §3.6                                         |
 | Method       | T                                                       |
 | Precondition | PROJECTION_ACTIVE                                       |
-| Procedure    | 1. On phone, disconnect from Android Auto (Settings → Connected devices → Disconnect). 2. Verify Pi display returns to splash screen ("Waiting for phone...") within 10 s. 3. Verify `journalctl -u piauto` shows "Projection stopped detected" and transition to IDLE. 4. Reconnect phone — verify AA projection resumes. |
-| Pass Criteria| Display returns to splash on disconnect. State machine transitions PROJECTION_ACTIVE → IDLE. Reconnection works without reboot. |
+| Procedure    | Test three disconnect paths: **(A) In-app disconnect:** On phone, disconnect AA from within the Android Auto app. Verify Pi returns to splash within 5 s. Journal shows "TCP session ended" or "RFCOMM reconnect attempt". **(B) BT settings disconnect:** On phone, go to Settings → Connected devices → disconnect PiAuto. Verify splash returns within 10 s. Journal shows "BT disconnected" or "left WiFi AP". **(C) Phone reboot:** Reboot phone. Verify splash returns within 10 s of BT dropping. Journal shows "BT disconnected". After each path, verify Pi auto-reconnects when phone returns to BT range. |
+| Pass Criteria| All three paths return to splash within 10 s. Journal shows appropriate disconnect signal in each case. Pi auto-reconnects within 30 s of phone becoming reachable. No user interaction required. |
 
 ---
 
@@ -715,7 +715,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-002 | BLE Pairing & Handshake           | D      | Pass    | 2026-03-28 | RFCOMM NewConnection received, IDLE → BT_PAIRING |
 | TC-003 | WifiStartRequest Delivery         | T      | Pass    | 2026-03-28 | Credentials exchanged, state → WIFI_WAIT |
 | TC-004 | Pairing Record Persistence        | T      | Pass    | 2026-03-28 | Pairing survives reboot; phone re-paired after clean wipe |
-| TC-005 | Auto-Reconnect                    | D      | Pending |            | Re-test with Classic BT page implementation (TC-057) |
+| TC-005 | Auto-Reconnect                    | D      | Pass    | 2026-04-04 | HFP HF + 30s retry loop; reconnects in <3s on boot, <30s after phone reboot |
 | TC-006 | AP Configuration                  | T      | Partial | 2026-03-28 | NM AP on uap0 works; channel 48 (2.4 GHz) not matching config channel 149 (5 GHz) |
 | TC-007 | DHCP Lease Assignment             | T      | Pass    | 2026-03-28 | Phone received IP on AP subnet |
 | TC-008 | TCP Listen Port 5000              | T      | Pass    | 2026-03-28 | Verified via `ss -tlnH` during BT_PAIRING |
@@ -752,7 +752,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-039 | Missing/Corrupt Config File       | T      | Pass    | 2026-03-28 | Boots with defaults, logs warning, no crash |
 | TC-040 | Phone Volume → PipeWire Sync      | T      | Pass    | 2026-03-28 | AVRCP 34/127→0.27, 43/127→0.34 mapped to wpctl |
 | TC-041 | BT Speaker Pairing UI             | D      | Pass    | 2026-03-28 | Scan, pair, connect via touchscreen |
-| TC-042 | Return to Splash on Disconnect    | T      | Pass    | 2026-03-28 | onAndroidAutoQuit detected, splash shown |
+| TC-042 | Return to Splash on Disconnect    | T      | Pass    | 2026-04-04 | TCP session end (~3s), BT disconnect, phone reboot all verified |
 | TC-043 | Single-Tap (No Double-Tap)        | T      | Pass    | 2026-03-28 | libinput disabled, evdevtouch:grab |
 | TC-044 | USB BT Dongle for Speaker         | T      | Pass    | 2026-03-28 | hci1 USB, no stuttering |
 | TC-045 | AP+STA Dual Interface             | T      | Pass    | 2026-03-28 | uap0 AP (192.168.50.1) + wlan0 STA (10.10.0.190) simultaneous |
@@ -767,7 +767,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-054 | WiFi AP Recovery After Reboot     | T      | Pass    | 2026-03-29 | uap0 AP active, piauto-wifi service active, AA reconnected without re-pairing after reboot |
 | TC-055 | Display Geometry Verification     | M      | Pass    | 2026-03-29 | VideoWidget confirmed 1024×600 via /tmp/vw_geom.txt; AA stream 800×480 |
 | TC-056 | EGLFS Window Stacking             | T      | Pass    | 2026-03-29 | MainWindow hidden on projection start; journal confirms "Hid window: QMainWindow" |
-| TC-057 | Classic BT Auto-Reconnect         | T      | Pending |            | Pi pages last known phone on IDLE entry; Android Auto should launch without user action |
+| TC-057 | HFP HF Auto-Reconnect on Boot     | T      | Pass    | 2026-04-04 | HFP connected <1s on service restart; RFCOMM received <2s; 30s retry covers phone reboot |
 
 ---
 
