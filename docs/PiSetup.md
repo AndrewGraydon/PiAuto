@@ -3,9 +3,9 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-PSG-001               |
-| Version        | 1.2                          |
-| Date           | 2026-03-29                   |
-| Status         | Draft                        |
+| Version        | 1.3                          |
+| Date           | 2026-04-04                   |
+| Status         | Active                       |
 
 ## 1. Prerequisites
 
@@ -117,69 +117,86 @@ sudo apt install -y \
 
 > **Note:** The GStreamer dev packages are required for the `GSTVideoOutput` rewrite (see Implementation Guide §2.4 patch #4). These replace the removed qt-gstreamer (QGlib) dependency.
 
+### 3.3 Clone the PiAuto Repository
+
+Clone the PiAuto repo with submodules — the aasdk and openauto forks are included as Git submodules and are required for the build script in §4.
+
+```bash
+cd /opt
+sudo git clone --recurse-submodules https://github.com/AndrewGraydon/PiAuto.git piauto
+sudo chown -R pi:pi /opt/piauto   # optional — allows the pi user to run the build
+```
+
 ---
 
 ## 4. Build OpenAuto and aasdk
 
-### 4.1 Build aasdk
+### 4.1 Build Using the Build Script (Recommended)
 
-Use the `AndrewGraydon/aasdk` fork on branch `piauto-debian13`. This includes the OpenSSL 3.x compatibility patch required for Debian 13 (Trixie).
+The repo includes `scripts/build-openauto.sh` which builds and installs aasdk and openauto from the included submodules, handles all cmake flags, and records build info to `/data/build-info.txt`.
 
 ```bash
-cd /tmp
-git clone -b piauto-debian13 https://github.com/AndrewGraydon/aasdk.git
-cd aasdk
+cd /opt/piauto
+bash scripts/build-openauto.sh
+```
 
-mkdir build && cd build
-sudo cmake -DCMAKE_BUILD_TYPE=Release \
+This takes ~20 minutes on a Pi 4B (fan recommended). It produces:
+- `/usr/local/bin/autoapp` — the OpenAuto binary
+- `/opt/piauto/openauto/lib/libopenauto.so.2` — the shared library (RPATH set at build time)
+- `/data/build-info.txt` — aasdk/openauto commit hashes and build date
+
+After successful completion, continue from §4.3 (OpenAuto Configuration).
+
+### 4.2 Manual Build (Alternative / Troubleshooting Reference)
+
+If the build script fails or you need to rebuild individual components:
+
+#### Build aasdk
+
+The `AndrewGraydon/aasdk` fork (branch `piauto-debian13`) includes an OpenSSL 3.x compatibility patch required for Debian 13 (Trixie).
+
+```bash
+AASDK_DIR=/opt/piauto/aasdk
+mkdir -p "$AASDK_DIR/build"
+cmake -S "$AASDK_DIR" -B "$AASDK_DIR/build" \
+    -DCMAKE_BUILD_TYPE=Release \
     -DSKIP_BUILD_PROTOBUF=ON \
-    -DSKIP_BUILD_ABSL=ON \
-    ..
-sudo make -j3
-sudo make install
+    -DSKIP_BUILD_ABSL=ON
+make -C "$AASDK_DIR/build" -j3
+sudo make -C "$AASDK_DIR/build" install
 sudo ldconfig
 ```
 
-> **Note:** `-DSKIP_BUILD_PROTOBUF=ON -DSKIP_BUILD_ABSL=ON` uses the system protobuf (3.21) instead of downloading protobuf v30 + abseil, which avoids build conflicts on Trixie.
+> `-DSKIP_BUILD_PROTOBUF=ON -DSKIP_BUILD_ABSL=ON` uses the system protobuf (3.21) instead of downloading protobuf v30 + abseil, which avoids build conflicts on Trixie.
 
-> **Note:** Use `-j3` on Pi 4 to avoid thermal throttling during the build. The `AndrewGraydon/aasdk` patch wraps deprecated OpenSSL 1.x calls in version guards so the build succeeds against OpenSSL 3.x on Debian 13.
+#### Build OpenAuto
 
-### 4.2 Build OpenAuto
-
-Use the `AndrewGraydon/openauto` fork on branch `piauto-debian13`. This includes the GSTVideoOutput rewrite, RtAudio 6.x fix, RtAudio mutex (audio stutter fix), and removal of qt-gstreamer dependency.
+The `AndrewGraydon/openauto` fork (branch `piauto-debian13`) includes the GSTVideoOutput rewrite, RtAudio 6.x fix, RtAudio static mutex (audio stutter fix), and removal of qt-gstreamer dependency.
 
 ```bash
-# Clone to /opt/openauto so RPATH is correct
-sudo git clone -b piauto-debian13 https://github.com/AndrewGraydon/openauto.git /opt/openauto
-
-# Configure (note: -DGST_BUILD=ON not TRUE)
-cmake -S /opt/openauto -B /opt/openauto/build \
+OPENAUTO_DIR=/opt/piauto/openauto
+mkdir -p "$OPENAUTO_DIR/build"
+cmake -S "$OPENAUTO_DIR" -B "$OPENAUTO_DIR/build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DGST_BUILD=ON \
     -DNOPI=ON
-
-# Build (-j2 avoids thermal throttle on Pi 4; use -j3 if cooled)
-cmake --build /opt/openauto/build -j2
-
-# Install binary to production path
-sudo cp /opt/openauto/bin/autoapp /usr/local/bin/autoapp
+make -C "$OPENAUTO_DIR/build" -j3
+sudo make -C "$OPENAUTO_DIR/build" install
 ```
 
-> **Note:** `-DGST_BUILD=ON` enables the GStreamer video path (required for correct H.264 rendering on EGLFS). The `GSTVideoOutput` implementation in this fork uses the plain GStreamer C API — no qt-gstreamer dependency. Do NOT omit this flag as it falls back to `QtVideoOutput` (QMediaPlayer + QVideoWidget) which cannot render raw H.264 NAL units on EGLFS.
-
-> **Note:** `-DNOPI=ON` disables the Broadcom OMX/VideoCore (`bcm_host.h`) path.
-
-> **Note:** The binary is built to `/opt/openauto/bin/autoapp` and the shared library to `/opt/openauto/lib/libopenauto.so.2`. The RPATH in the binary points to `/opt/openauto/lib/`, so `libopenauto.so.2` is found at runtime without needing `ldconfig` or copying the library elsewhere.
-
-> **Note:** The `opencardev` binary previously used is saved at `/usr/local/bin/autoapp-2026.03.28+git.4cc739b` as a rollback. See Implementation Guide §2.4 for full migration details.
+> `-DGST_BUILD=ON` enables the GStreamer video path (required for H.264 rendering on EGLFS). Do NOT omit — the fallback `QtVideoOutput` cannot render raw H.264 NAL units on EGLFS.
+>
+> `-DNOPI=ON` disables the Broadcom OMX/VideoCore (`bcm_host.h`) path.
+>
+> The binary RPATH points to `$OPENAUTO_DIR/lib/`, so `libopenauto.so.2` is found at runtime without `ldconfig` or copying.
 
 #### Rebuilding after source changes
 
 ```bash
-cmake -S /opt/openauto -B /opt/openauto/build \
-    -DCMAKE_BUILD_TYPE=Release -DGST_BUILD=ON \
-    && cmake --build /opt/openauto/build -j2
-sudo cp /opt/openauto/bin/autoapp /usr/local/bin/autoapp
+cmake -S /opt/piauto/openauto -B /opt/piauto/openauto/build \
+    -DCMAKE_BUILD_TYPE=Release -DGST_BUILD=ON
+make -C /opt/piauto/openauto/build -j3
+sudo make -C /opt/piauto/openauto/build install
 sudo systemctl restart piauto
 ```
 
@@ -305,9 +322,13 @@ Add to `/etc/fstab`:
 
 > **Important:** This step must be done before enabling overlayfs (§6.3). Once overlayfs is active, changes to `/var/lib/bluetooth/` are volatile unless the bind mount is in place.
 
-### 6.3 Read-Only Root Filesystem (overlayfs)
+### 6.3 Read-Only Root Filesystem (overlayfs) — Optional
 
-> **Important:** Configure this LAST, after all other setup is complete. Once enabled, changes to `/` are volatile.
+Overlayfs is **not required** for PiAuto. The system uses ext4 journaling (crash-consistent) for `/` and the BlueZ bind mount (§6.2.1) for pairing persistence. These together provide adequate resilience against unexpected power cuts — the ext4 journal recovers the root partition on next boot, and BlueZ pairing records survive because they are written directly to `/data/`.
+
+If you choose to enable overlayfs for additional protection (e.g., to prevent SD card wear from log writes):
+
+> **Important:** Configure this LAST, after all other setup is complete. Once enabled, changes to `/` are volatile and require disabling overlayfs to persist.
 
 > **Prerequisite:** The BlueZ bind mount (§6.2.1) must be configured and the `/etc/fstab` entry added before enabling overlayfs. Without it, BlueZ's pairing database will be written to the RAM overlay and lost on every power cycle.
 
@@ -317,17 +338,9 @@ sudo raspi-config
 # → Reboot when prompted
 ```
 
-Or manually:
-
-```bash
-sudo apt install -y overlayroot
-# Edit /etc/overlayroot.conf:
-#   overlayroot="tmpfs"
-```
-
 After enabling overlayfs:
 - `/` is read-only (backed by ext4, overlaid with tmpfs)
-- `/data` remains writable (separate mount)
+- `/data` remains writable (separate ext4 mount)
 - `/tmp`, `/var/log` are tmpfs (volatile)
 
 To make changes to the root filesystem later, temporarily disable overlayfs via `raspi-config`.
@@ -446,14 +459,14 @@ WantedBy=multi-user.target
 
 ### 9.1 Install the Package
 
+The PiAuto repo was cloned to `/opt/piauto` in §3.3. Install the Python package from there:
+
 ```bash
-cd /opt
-sudo git clone <piauto-repo-url> piauto
-cd piauto
+cd /opt/piauto
 sudo pip3 install --break-system-packages .
 ```
 
-Or for development:
+Or for development (editable install):
 
 ```bash
 sudo pip3 install --break-system-packages -e ".[dev]"
@@ -638,7 +651,11 @@ nmcli connection add type wifi ifname uap0 con-name piauto-ap \
 
 > **Channel note:** The AP channel is determined at runtime by the station's channel (both must match because they share one radio). The `wifi.channel` setting in the NM profile is overridden by the driver.
 
-> **Password note:** Change `piauto1234` to a stronger passphrase before deployment. Update both this NM profile and `/data/piauto.yaml` (`wifi.password`) — the RFCOMM credential exchange sends the value from the YAML config to the phone.
+> **Password note:** Change `piauto1234` to a stronger passphrase before deployment. The NM profile password and `/data/piauto.yaml` `wifi.password` must match — the RFCOMM credential exchange sends the value from the YAML config to the phone. Update both with:
+> ```bash
+> nmcli connection modify piauto-ap wifi-sec.psk "your-strong-password"
+> # Then update wifi.password in /data/piauto.yaml to match
+> ```
 
 The `wlan0` STA connection is managed by the existing NM profile (e.g., `netplan-wlan0-Graydons5G` or whichever profile connected during initial setup).
 
@@ -790,20 +807,40 @@ Run these checks after setup to confirm everything is ready:
 
 After completing all setup steps:
 
-1. Enable the read-only root filesystem (§6.3).
+1. Verify the checklist (§13) passes.
 2. Reboot.
 3. The PiAuto service starts automatically.
+
+### 14.1 First Pairing (BLE Discovery)
+
 4. Expected boot sequence:
    - Splash screen appears ("Starting...")
    - Transitions to "Waiting for phone..."
-   - Pi is advertising BLE WAA service
+   - Pi is advertising the Wireless Android Auto BLE service
 5. On your Android phone:
-   - Go to Settings → Connected devices → Connection preferences → Android Auto
-   - Enable "Add new cars to Android Auto"
-   - The phone should discover "PiAuto"
-   - Accept pairing
-   - Phone joins the Pi's WiFi AP automatically
-   - Android Auto projection starts on the display
+   - Go to **Settings → Connected devices → Connection preferences → Android Auto**
+   - Enable **"Add new cars to Android Auto"**
+   - The phone discovers "PiAuto" and initiates Bluetooth pairing
+   - Accept the pairing request
+   - The phone receives the Pi's WiFi credentials over RFCOMM and joins the Pi's AP automatically
+   - Android Auto projection starts on the display within seconds
+
+### 14.2 Subsequent Boots (HFP Auto-Reconnect)
+
+After the first successful pairing, subsequent boots require no user interaction:
+
+1. Pi boots → PiAuto service starts → splash screen appears
+2. PiAuto pages the last known phone via Bluetooth Classic and registers an HFP Hands-Free profile
+3. Android detects the HFP device and automatically enters car mode — this triggers Android Auto to initiate the RFCOMM connection without any user interaction
+4. Phone joins the Pi's AP and projection starts within ~2 seconds of the phone coming within Bluetooth range
+5. If the phone is not in range, PiAuto retries every 30 seconds until it connects
+
+### 14.3 Disconnect and Reconnect
+
+When the AA session ends (in-app disconnect, phone reboot, or out of range):
+- PiAuto detects the disconnect via multiple independent signals (TCP session end, RFCOMM, WiFi AP departure, BlueZ disconnect) — whichever fires first (~3 s for an in-app disconnect)
+- Splash screen returns to "Waiting for phone..."
+- Auto-reconnect loop starts; phone reconnects automatically when it re-enters range
 
 ---
 
@@ -845,3 +882,6 @@ journalctl -t piauto -f
 | No video or wrong video size on EGLFS | Built without `-DGST_BUILD=ON` | Rebuild per §4.2 with `-DGST_BUILD=ON`. Rollback: `sudo cp /usr/local/bin/autoapp-2026.03.28+git.4cc739b /usr/local/bin/autoapp`. |
 | GStreamer pipeline fails to start | Missing gstreamer plugins | Run: `apt install gstreamer1.0-plugins-bad gstreamer1.0-libav`. Check: `gst-inspect-1.0 h264parse`. |
 | After overlayfs setup, phone/speaker requires re-pairing on every boot | BlueZ bind mount not configured | Check fstab (`grep bluetooth /etc/fstab`) and verify `/data/bluetooth/` is populated. Run `mount \| grep bluetooth` — if not mounted, the bind mount is missing. See §6.2.1. |
+| Splash screen doesn't return after disconnecting AA | Disconnect signals not firing | Check `journalctl -u piauto -f` during disconnect — look for "TCP session ended", "Phone left AP", or "Phone disconnected" log lines. If none appear, `ss`, `arp-scan`, or BlueZ D-Bus subscription may be failing. |
+| Phone doesn't auto-reconnect after reboot | HFP profile not registered | Check `journalctl -u piauto` for "HFP HF profile registered". Verify the phone is trusted in BlueZ: `bluetoothctl info XX:XX:XX:XX:XX:XX` — `Trusted: yes` must be set. |
+| Phone auto-reconnects but starts BLE flow instead of HFP | `_hfp_hf_registered` flag not set | Restart piauto: `systemctl restart piauto`. If issue persists, verify the installed `ble.py` sets `self._hfp_hf_registered = True` at the end of `_register_hfp_hf_profile()`. |

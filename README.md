@@ -100,40 +100,46 @@ piauto/
 
 ### On a Raspberry Pi
 
-See the full [Pi Setup Guide](docs/PiSetup.md) for hardware wiring, OS configuration, and service setup.
+> **Full deployment requires additional system setup** — WiFi AP+STA, PipeWire/Bluetooth audio, EGLFS display config, and systemd services. Follow the complete **[Pi Setup Guide](docs/PiSetup.md)** for a working system from a bare Pi.
+
+The steps below give an overview of the core install sequence:
 
 ```bash
 # 1. Clone with submodules (includes aasdk and openauto source)
 git clone --recurse-submodules https://github.com/AndrewGraydon/PiAuto.git
 cd PiAuto
 
-# 2. Build and install OpenAuto + aasdk (~20 min on Pi 4B)
-bash scripts/build-openauto.sh
+# 2. Install build and runtime packages (see PiSetup.md §3 for full list)
+sudo apt install -y bluez pipewire wireplumber python3-pip python3-pyqt5 \
+    cmake build-essential libssl-dev libboost-all-dev \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-bad gstreamer1.0-libav
 
-# 3. Install runtime packages
-sudo apt install -y bluez hostapd dnsmasq pipewire wireplumber \
-    libqt5multimedia5-plugins gstreamer1.0-libav gstreamer1.0-plugins-bad \
-    python3-pip python3-pyqt5
+# 3. Build and install OpenAuto + aasdk (~20 min on Pi 4B)
+bash scripts/build-openauto.sh
 
 # 4. Install PiAuto
 sudo pip3 install --break-system-packages .
 
-# 5. Create config
+# 5. Create config (edit wifi.password and wifi.country before running)
 sudo mkdir -p /data
 sudo tee /data/piauto.yaml << 'EOF'
 wifi:
   ssid: "PiAuto"
   password: "yourpassword"   # required — no default, min 8 characters
   channel: 149
-  country: "AU"              # change to your country code
+  country: "AU"              # change to your ISO 3166-1 country code
 bluetooth:
   device_name: "PiAuto"
 openauto:
   binary: "/usr/local/bin/autoapp"
 EOF
 
-# 6. Run
-sudo python3 -m piauto
+# 6. See PiSetup.md §11 for WiFi AP+STA setup, §10 for Bluetooth audio,
+#    §12 for EGLFS display config, and §8 for the systemd service.
+
+# 7. Start (once all system setup is complete)
+sudo systemctl start piauto
 ```
 
 ### On a Development Machine
