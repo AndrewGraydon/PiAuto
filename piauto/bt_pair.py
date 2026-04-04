@@ -158,47 +158,61 @@ async def pair(mac: str) -> None:
         await agent_mgr.call_register_agent(agent_path, "NoInputNoOutput")
         await agent_mgr.call_request_default_agent(agent_path)
 
-        # Ensure device is in BlueZ D-Bus tree via BR/EDR discovery
+        # Get adapter interface — needed for remove_device and discovery
+        adapter_intro = await bus.introspect("org.bluez", "/org/bluez/hci0")
+        adapter = bus.get_proxy_object(
+            "org.bluez", "/org/bluez/hci0", adapter_intro
+        )
+        adapter_iface = adapter.get_interface("org.bluez.Adapter1")
+
         dev_path = "/org/bluez/hci0/dev_" + mac.replace(":", "_")
 
+        # If BlueZ already has this device (even as paired), remove it first.
+        # This handles the case where the speaker has forgotten its pairing
+        # (factory reset, battery drain) but BlueZ still holds a stale entry
+        # with Paired=True — which would cause call_pair() to be skipped and
+        # call_connect() to fail with an authentication error.
+        # Only the single selected device is removed; all other pairings are untouched.
         try:
             dev_intro = await bus.introspect("org.bluez", dev_path)
-            ifaces = [i.name for i in dev_intro.interfaces]
-            if "org.bluez.Device1" not in ifaces:
-                raise Exception("no Device1")
-        except Exception:
-            # Device not known — run brief BR/EDR discovery
-            adapter_intro = await bus.introspect("org.bluez", "/org/bluez/hci0")
-            adapter = bus.get_proxy_object(
-                "org.bluez", "/org/bluez/hci0", adapter_intro
-            )
-            adapter_iface = adapter.get_interface("org.bluez.Adapter1")
-
-            await adapter_iface.call_set_discovery_filter(
-                {"Transport": Variant("s", "bredr")}
-            )
-            await adapter_iface.call_start_discovery()
-
-            found = False
-            for _ in range(15):
-                await asyncio.sleep(1)
+            if any(i.name == "org.bluez.Device1" for i in dev_intro.interfaces):
+                dev_obj = bus.get_proxy_object("org.bluez", dev_path, dev_intro)
                 try:
-                    dev_intro = await bus.introspect("org.bluez", dev_path)
-                    ifaces = [i.name for i in dev_intro.interfaces]
-                    if "org.bluez.Device1" in ifaces:
-                        found = True
-                        break
+                    await dev_obj.get_interface("org.bluez.Device1").call_disconnect()
                 except Exception:
-                    continue
+                    pass
+                await adapter_iface.call_remove_device(dev_path)
+                log.info("Removed stale BlueZ entry for %s — performing clean re-pair", mac)
+                await asyncio.sleep(1)
+        except Exception:
+            pass  # device not previously known — nothing to remove
 
+        # Discover the device (must be in pairing mode)
+        await adapter_iface.call_set_discovery_filter(
+            {"Transport": Variant("s", "bredr")}
+        )
+        await adapter_iface.call_start_discovery()
+
+        found = False
+        for _ in range(15):
+            await asyncio.sleep(1)
             try:
-                await adapter_iface.call_stop_discovery()
+                dev_intro = await bus.introspect("org.bluez", dev_path)
+                ifaces = [i.name for i in dev_intro.interfaces]
+                if "org.bluez.Device1" in ifaces:
+                    found = True
+                    break
             except Exception:
-                pass
+                continue
 
-            if not found:
-                print(f"PAIR_FAIL|Device {mac} not found", flush=True)
-                return
+        try:
+            await adapter_iface.call_stop_discovery()
+        except Exception:
+            pass
+
+        if not found:
+            print(f"PAIR_FAIL|Device {mac} not found", flush=True)
+            return
 
         # Trust, pair, connect
         dev_intro = await bus.introspect("org.bluez", dev_path)
@@ -212,11 +226,9 @@ async def pair(mac: str) -> None:
         # Trust
         await props.call_set("org.bluez.Device1", "Trusted", Variant("b", True))
 
-        # Pair
+        # Pair — device entry was removed above so this is always a fresh pair
         try:
-            paired_v = await props.call_get("org.bluez.Device1", "Paired")
-            if not paired_v.value:
-                await dev_iface.call_pair()
+            await dev_iface.call_pair()
         except Exception as e:
             if "AlreadyExists" not in str(e):
                 print(f"PAIR_FAIL|Pairing failed: {e}", flush=True)
