@@ -92,8 +92,8 @@ This document defines the verification approach for every requirement in PiAuto-
 | Traces to    | FR-005, NR-004                                          |
 | Method       | D                                                       |
 | Precondition | Phone previously paired and connected successfully       |
-| Procedure    | 1. Reboot Pi. 2. Ensure phone BT and WiFi are ON, in range, Android Auto app installed. 3. Wait for Pi to reach IDLE. 4. Observe Pi pages phone via Classic BT (`journalctl -u piauto` shows "Auto-reconnect: paging last known phone"). 5. Observe phone Android Auto launches automatically and system reaches PROJECTION_ACTIVE without any user interaction. |
-| Pass Criteria| System automatically connects and reaches PROJECTION_ACTIVE without user interaction. Journal shows "Auto-reconnect: paging last known phone" in IDLE. |
+| Procedure    | 1. Reboot Pi. 2. Ensure phone BT and WiFi are ON, in range. Phone screen may be off; Android Auto app does not need to be in foreground. 3. Wait for Pi to reach IDLE. 4. Observe journal: "Auto-reconnect: paging last known phone" → "HFP HF profile registered" → "HFP HF connected" → "RFCOMM NewConnection". 5. Observe Android Auto launches on phone automatically and system reaches PROJECTION_ACTIVE without any user interaction. |
+| Pass Criteria| System automatically connects and reaches PROJECTION_ACTIVE without user interaction. Journal shows HFP HF registered and connected within 3 s of IDLE entry. Android Auto launches on phone with screen off. |
 
 ---
 
@@ -695,15 +695,15 @@ This document defines the verification approach for every requirement in PiAuto-
 
 ---
 
-### TC-057: Classic BT Auto-Reconnect on Boot
+### TC-057: HFP HF Auto-Reconnect on Boot (OEM-Style)
 
 | Field        | Value                                                   |
 | :----------- | :------------------------------------------------------ |
 | Traces to    | FR-005, NR-004                                          |
 | Method       | T                                                       |
-| Precondition | Phone previously paired. Phone screen off, Android Auto app not open. |
-| Procedure    | 1. Ensure phone BT and WiFi are ON but AA app not in foreground. 2. Power cycle Pi. 3. Monitor `journalctl -u piauto -f`. 4. Verify "Auto-reconnect: paging last known phone" log appears in IDLE. 5. Verify Android Auto launches on phone automatically without user opening the app. 6. Verify system reaches PROJECTION_ACTIVE. |
-| Pass Criteria| Journal shows "Auto-reconnect: paging last known phone XX:XX:XX:XX:XX:XX". Android Auto launches on phone without user interaction. PROJECTION_ACTIVE reached. |
+| Precondition | Phone previously paired. Phone screen off, Android Auto app not in foreground. |
+| Procedure    | 1. Ensure phone BT and WiFi are ON. Screen may remain off throughout. 2. Power cycle Pi (full cold reboot). 3. Monitor `journalctl -u piauto -f`. 4. Verify sequence: "Auto-reconnect: paging last known phone XX:XX:XX:XX:XX:XX" → "HFP HF profile registered" → "HFP HF connected: /org/bluez/... — establishing SLC" → "RFCOMM NewConnection". 5. Verify Android Auto launches on phone automatically without any user interaction (screen-off launch). 6. Verify system reaches PROJECTION_ACTIVE. 7. Verify total time from IDLE entry to PROJECTION_ACTIVE is under 10 s. |
+| Pass Criteria| All four journal entries appear in order. Android Auto launches with phone screen off. PROJECTION_ACTIVE reached within 10 s of IDLE entry. No user interaction required. |
 
 ---
 

@@ -487,19 +487,23 @@ class StateMachine:
         if self._volume:
             await self._volume.start()
 
-        # Wait for OpenAuto to exit, projection stopped, or ignition off.
-        # The phone can disconnect without autoapp exiting — it stays running
-        # showing its own "waiting" screen. We detect this via stderr patterns
-        # and kill autoapp ourselves to return to our splash.
+        # Wait for OpenAuto to exit, projection stopped, ignition off, or a new
+        # RFCOMM connection (which means the phone dropped AA and is retrying).
+        # OpenAuto often stays running after a phone-side disconnect without
+        # producing any PROJECTION_STOPPED_PATTERNS — the new RFCOMM attempt is
+        # the reliable disconnect signal in that case.
         exit_task = asyncio.create_task(self._openauto.wait_for_exit())
         stopped_task = asyncio.create_task(
             self._openauto.wait_for_projection_stopped()
         )
         ignition_task = asyncio.create_task(self._ignition_off.wait())
         clock_task = asyncio.create_task(self._periodic_clock_save())
+        reconnect_task = asyncio.create_task(
+            self._ble.wait_for_rfcomm_during_projection()
+        )
 
         done, pending = await asyncio.wait(
-            [exit_task, stopped_task, ignition_task, clock_task],
+            [exit_task, stopped_task, ignition_task, clock_task, reconnect_task],
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -512,6 +516,16 @@ class StateMachine:
 
         if ignition_task in done:
             self._transition(State.SHUTDOWN, Event.IGNITION_OFF)
+            return
+
+        if reconnect_task in done:
+            # Phone sent a new RFCOMM connection — it ended the AA session and
+            # is trying to restart.  Kill OpenAuto and return to IDLE so the
+            # next reconnect attempt is handled cleanly.
+            log.info("Phone reconnect attempt detected — returning to IDLE")
+            await self._openauto.kill()
+            await self._splash.launch("Waiting for phone...")
+            self._transition(State.IDLE, Event.PHONE_DISCONNECTED)
             return
 
         if stopped_task in done:

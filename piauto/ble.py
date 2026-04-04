@@ -349,6 +349,7 @@ class BleManager:
         self._connection_queue: asyncio.Queue | None = None
         self._adv_registered = False
         self._profile_registered = False
+        self._hfp_hf_registered = False
 
     async def setup(self) -> bool:
         """Connect to system D-Bus, register agent and RFCOMM profile."""
@@ -383,12 +384,6 @@ class BleManager:
             await self._register_rfcomm_profile()
         except Exception as exc:
             log.warning("Failed to register RFCOMM profile: %s", exc)
-
-        # Register HFP HF profile so Device1.Connect() triggers Android Auto
-        try:
-            await self._register_hfp_hf_profile()
-        except Exception as exc:
-            log.warning("Failed to register HFP HF profile: %s", exc)
 
         log.info("BLE manager ready (ap_ip=%s, ap_iface=%s)", self._ap_ip, self._ap_interface)
         return True
@@ -561,6 +556,7 @@ class BleManager:
             },
         )
         log.info("HFP HF profile registered (UUID: %s)", HFP_HF_UUID)
+        self._hfp_hf_registered = True
 
     async def _register_ble_advertisement(self) -> None:
         """Register a BLE advertisement with the WAA service UUID."""
@@ -730,6 +726,27 @@ class BleManager:
 
         return None
 
+    async def wait_for_rfcomm_during_projection(self) -> None:
+        """Block until a new RFCOMM connection arrives during an active session.
+
+        During PROJECTION_ACTIVE, a new RFCOMM connection means the phone has
+        ended the AA session and is attempting to restart it (the phone sends
+        these periodically after disconnecting AA).  The fd is closed immediately
+        — IDLE will wait for the next one via wait_for_phone().
+        """
+        if not self._connection_queue:
+            await asyncio.get_running_loop().create_future()  # block forever
+            return
+        device_path, fd = await self._connection_queue.get()
+        log.info(
+            "New RFCOMM connection during projection — phone reconnecting: %s",
+            device_path,
+        )
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
     async def send_credentials(self, phone: PhoneInfo) -> bool:
         """Exchange WiFi credentials with the phone over RFCOMM.
 
@@ -799,14 +816,14 @@ class BleManager:
         return self._pairing_store.get_last_connected()
 
     async def try_reconnect_phone(self, mac: str) -> None:
-        """Send a Classic BT page to a previously paired phone.
+        """Page a previously paired phone and connect HFP to trigger Android Auto.
 
-        OEM head units auto-connect by paging the phone on boot — the phone
-        accepts the ACL link, Android Auto sees a known paired head unit has
-        appeared, and initiates the RFCOMM session back to our WAA profile.
-        Even if no outbound profiles connect (Pi is the RFCOMM server, not
-        client), the page alone is enough to wake Android Auto and trigger
-        the inbound RFCOMM connection.  Non-fatal if the phone is out of range.
+        OEM head units connect in seconds by:
+          1. Calling Device1.Connect() — establishes ACL + A2DP
+          2. Calling Device1.ConnectProfile(HFP_AG_UUID) — connects HFP HF→AG
+        Android detects HFP as a 'car hands-free device', immediately triggers
+        Android Auto, which then initiates the WAA RFCOMM back to the Pi.
+        Non-fatal if the phone is out of range or rejects the connection.
         """
         if not self._bus:
             return
@@ -817,7 +834,7 @@ class BleManager:
                 log.debug("Phone %s not in BlueZ cache — skipping auto-reconnect", mac)
                 return
             dev = self._bus.get_proxy_object("org.bluez", dev_path, dev_intro)
-            # Ensure the device is trusted so BlueZ auto-connects on future boots
+            # Ensure trusted so BlueZ persists auto-connect across boots
             try:
                 from dbus_next import Variant as _Variant
                 props = dev.get_interface("org.freedesktop.DBus.Properties")
@@ -826,9 +843,21 @@ class BleManager:
                 pass
             dev_iface = dev.get_interface("org.bluez.Device1")
             log.info("Auto-reconnect: paging last known phone %s", mac)
+            # Step 1: establish ACL + A2DP
             await asyncio.wait_for(dev_iface.call_connect(), timeout=15.0)
+            # Step 2: register HFP HF profile NOW — while the device is already
+            # connected.  BlueZ AutoConnect=True fires immediately when a profile
+            # is registered for a device that is already connected, which is
+            # exactly what we need.  Registering before connect (in setup) does
+            # NOT trigger the same path — BlueZ only auto-connects on the
+            # profile-registration event, not on the device-connect event.
+            if not self._hfp_hf_registered:
+                try:
+                    await self._register_hfp_hf_profile()
+                except Exception as exc:
+                    log.debug("Auto-reconnect: HFP registration failed: %s", exc)
         except asyncio.TimeoutError:
-            log.debug("Auto-reconnect to %s: page timed out (phone not in range)", mac)
+            log.debug("Auto-reconnect to %s: timed out (phone not in range)", mac)
         except Exception as exc:
             log.debug("Auto-reconnect to %s: %s", mac, exc)
 

@@ -678,9 +678,11 @@ PiAuto registers a WAA RFCOMM **server** profile — it waits for the phone to i
 
 ### 20.2 How OEM Head Units Work
 
-OEM head units send a Classic BT **page** (connection request) to previously paired phones immediately on power-on. The phone accepts the ACL link. Android Auto on the phone detects that a known paired head unit has become reachable and automatically initiates the RFCOMM session to the head unit's WAA profile. The user sees Android Auto launch on their phone without any interaction.
+OEM head units register as an **HFP Hands-Free (HF)** device (Bluetooth UUID 0x111e). On power-on they page the phone (Classic BT ACL) and connect HFP. Android detects the HFP HF device and immediately enters **car mode** — this triggers Android Auto to initiate the WAA RFCOMM session to the head unit's registered WAA profile without any user interaction. The user sees Android Auto launch on their phone in seconds, even with the screen off.
 
-### 20.3 Fix: `BleManager.try_reconnect_phone()`
+The key insight is that Android's car-mode detection fires on **HFP HF connection**, not on BLE scan. BLE advertising for WAA discovery is only the initial pairing mechanism; subsequent auto-reconnect uses HFP.
+
+### 20.3 Fix: `BleManager.try_reconnect_phone()` with HFP HF
 
 After `start_advertising()` in IDLE, the state machine fires a background task:
 
@@ -690,22 +692,43 @@ if last_mac:
     asyncio.create_task(self._ble.try_reconnect_phone(last_mac))
 ```
 
-`try_reconnect_phone()` calls BlueZ `Device1.Connect()` on the last known phone's device path:
+`try_reconnect_phone()` performs a two-step sequence:
+
+**Step 1 — Establish ACL + A2DP:** call BlueZ `Device1.Connect()` on the last known phone's device path. This pages the phone and connects internally-handled profiles (primarily A2DP via WirePlumber).
 
 ```python
 await asyncio.wait_for(dev_iface.call_connect(), timeout=15.0)
 ```
 
-This sends a BT page to the phone. The phone accepts the ACL link. Even if no outbound profiles connect (the Pi is the RFCOMM server, not a client), the ACL connection is enough to trigger Android Auto to initiate the RFCOMM session back to the Pi's registered WAA profile. `Profile1.NewConnection` fires, `wait_for_phone()` picks up the fd from the queue, and the normal IDLE → BT_PAIRING transition proceeds.
+**Step 2 — Register HFP HF profile AFTER connect:** immediately after `Device1.Connect()` returns, register an HFP HF `Profile1` with BlueZ:
 
-### 20.4 Failure Handling
+```python
+if not self._hfp_hf_registered:
+    await self._register_hfp_hf_profile()
+```
+
+The registration options: `Role="client"`, `AutoConnect=True`, `Version=0x0108` (HFP 1.8), `Features=0x0000` (minimal).
+
+**Critical timing:** BlueZ's `AutoConnect=True` for a `Profile1` fires when the profile is **registered while the device is already connected** — not when the device connects to an already-registered profile. By registering after `Device1.Connect()`, the HFP HF channel connects immediately. Android detects the HFP HF device and fires car mode, which triggers the WAA RFCOMM back to the Pi.
+
+**Step 3 — HFP SLC:** `Profile1.NewConnection` receives the RFCOMM socket fd. A daemon thread runs the minimal HFP Service Level Connection (SLC) handshake: `AT+BRSF=0` → `AT+CIND=?` → `AT+CIND?` → `AT+CMER=3,0,0,1`. The thread then holds the socket open (keeping HFP connected) until Android Auto ends the session.
+
+The WAA RFCOMM `Profile1.NewConnection` fires concurrently, `wait_for_phone()` picks up the fd from its queue, and the normal IDLE → BT_PAIRING transition proceeds.
+
+**Observed latency:** service start → HFP connected → RFCOMM received = ~1 second on cold boot.
+
+### 20.4 Trusted Flag
+
+Phones are set `Trusted=True` in BlueZ when first paired (`bt_pair.py` already does this for speakers; `statemachine.py` calls `ble.trust_device(mac)` after saving the phone pairing). This accelerates BlueZ's reconnect policy and is required for `AutoConnect=True` to fire reliably.
+
+### 20.5 Failure Handling
 
 - Phone not in range: `call_connect()` times out after 15 s. Logged at DEBUG level. BLE advertising continues as fallback.
 - Phone not in BlueZ cache (never paired): device path introspection fails. Logged at DEBUG. No action.
-- Phone rejects: exception logged at DEBUG. BLE advertising continues.
+- HFP registration fails: exception logged at DEBUG. `_hfp_hf_registered` remains `False` so the next reconnect attempt will retry.
 - No previously paired phone: `get_last_connected_mac()` returns `None`. Task not created.
 
-The reconnect task runs concurrently with `asyncio.wait` for phone/ignition/setup events. A failure does not affect normal operation.
+The reconnect task runs concurrently with `asyncio.wait` for phone/ignition/setup events. A failure does not affect normal operation — BLE advertising remains active as the discovery fallback.
 
 ---
 

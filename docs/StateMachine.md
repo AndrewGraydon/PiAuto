@@ -3,7 +3,7 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-SM-001                |
-| Version        | 3.3                          |
+| Version        | 3.4                          |
 | Date           | 2026-04-04                   |
 | Status         | Draft                        |
 
@@ -91,7 +91,7 @@ stateDiagram-v2
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | Stop AP via `WifiManager.stop_ap()` (stops hostapd + dnsmasq if running in standalone mode; no-op in NM-managed mode). Kill OpenAuto (if running). Advertise WAA BLE service UUID (sets adapter `Discoverable=True`, `DiscoverableTimeout=0`, registers BLE advertisement). Attempt proactive Classic BT reconnect to last known phone (`Device1.Connect()` in background — sends a BT page so Android Auto on the phone initiates the RFCOMM session back to the Pi's WAA profile). Ensure splash screen is running ("Waiting for phone"). |
+| Entry Actions  | Stop AP via `WifiManager.stop_ap()` (stops hostapd + dnsmasq if running in standalone mode; no-op in NM-managed mode). Kill OpenAuto (if running). Advertise WAA BLE service UUID (sets adapter `Discoverable=True`, `DiscoverableTimeout=0`, registers BLE advertisement). Attempt proactive Classic BT reconnect to last known phone (background task: `Device1.Connect()` establishes ACL + A2DP, then registers an HFP HF Profile1 — Android detects the HFP Hands-Free device, enters car mode, and immediately initiates the WAA RFCOMM session without user interaction, matching OEM head unit behaviour). Ensure splash screen is running ("Waiting for phone"). |
 | Exit Actions   | Stop BLE advertising                                          |
 | Satisfies      | FR-001, FR-005, FR-036, NR-004                                |
 
