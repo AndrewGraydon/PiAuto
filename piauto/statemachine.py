@@ -244,9 +244,15 @@ class StateMachine:
 
         # Proactively page the last paired phone so Android Auto initiates
         # the RFCOMM session without the user having to open the app.
+        # Retry every 30s in case the first attempt fired while the phone was
+        # still off (e.g. after a phone reboot or coming into range).
         last_mac = self._ble.get_last_connected_mac()
         if last_mac:
-            asyncio.create_task(self._ble.try_reconnect_phone(last_mac))
+            async def _reconnect_loop(mac: str) -> None:
+                while True:
+                    await self._ble.try_reconnect_phone(mac)
+                    await asyncio.sleep(30)
+            asyncio.create_task(_reconnect_loop(last_mac))
 
         # Monitor splash stdout for "SETUP" button press
         async def _watch_splash_stdout():
