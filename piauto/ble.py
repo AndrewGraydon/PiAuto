@@ -23,6 +23,7 @@ import json
 import os
 import socket
 import struct
+import threading
 from pathlib import Path
 from typing import NamedTuple
 
@@ -64,6 +65,10 @@ PROPERTIES_IFACE = "org.freedesktop.DBus.Properties"
 AGENT_PATH = "/piauto/agent"
 ADV_PATH = "/piauto/advertisement0"
 PROFILE_PATH = "/piauto/waa_profile"
+HFP_HF_PROFILE_PATH = "/piauto/hfp_hf_profile"
+
+# HFP Hands-Free profile UUID (Pi = HF client, phone = AG server)
+HFP_HF_UUID = "0000111e-0000-1000-8000-00805f9b34fb"
 
 # Pairing storage
 PAIRING_DIR = Path("/data/bt")
@@ -75,6 +80,54 @@ AA_PORT = 5000  # OpenAuto/Crankshaft wireless TCP listen port
 # WiFi security mode enum (from WifiInfoResponse.proto)
 # OPEN=1, WEP_64=2, WEP_128=3, WPA_PERSONAL=4, WPA2_PERSONAL=8
 SECURITY_WPA2 = 8
+
+
+def _run_hfp_slc(fd: int) -> None:
+    """Minimal HFP HF Service Level Connection (daemon thread).
+
+    Completes the AT command handshake with the phone's HFP AG so Android
+    recognises the Pi as a connected car hands-free device.  Android Auto
+    then immediately initiates the WAA RFCOMM session — matching OEM head
+    unit reconnect speed — instead of waiting for BLE background scanning.
+
+    The connection is kept open for as long as the phone maintains it.
+    """
+    sock = socket.fromfd(fd, socket.AF_BLUETOOTH, socket.SOCK_STREAM, 3)
+    os.close(fd)  # fromfd() dups internally; close the original
+    try:
+        sock.settimeout(5.0)
+        buf = b""
+
+        def exchange(cmd: bytes) -> None:
+            nonlocal buf
+            sock.sendall(cmd + b"\r")
+            while b"\r\nOK\r\n" not in buf and b"\r\nERROR\r\n" not in buf:
+                chunk = sock.recv(512)
+                if not chunk:
+                    raise ConnectionError("HFP socket closed")
+                buf += chunk
+            for marker in (b"\r\nOK\r\n", b"\r\nERROR\r\n"):
+                idx = buf.find(marker)
+                if idx != -1:
+                    buf = buf[idx + len(marker):]
+                    break
+
+        exchange(b"AT+BRSF=0")        # announce HF features (none)
+        exchange(b"AT+CIND=?")        # query indicator descriptions
+        exchange(b"AT+CIND?")         # query indicator values
+        exchange(b"AT+CMER=3,0,0,1")  # enable indicator reporting → SLC established
+
+        # SLC complete — keep open, draining unsolicited events until disconnect
+        sock.settimeout(None)
+        while sock.recv(512):
+            pass
+    except Exception:
+        pass
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
 
 
 class PhoneInfo(NamedTuple):
@@ -331,6 +384,12 @@ class BleManager:
         except Exception as exc:
             log.warning("Failed to register RFCOMM profile: %s", exc)
 
+        # Register HFP HF profile so Device1.Connect() triggers Android Auto
+        try:
+            await self._register_hfp_hf_profile()
+        except Exception as exc:
+            log.warning("Failed to register HFP HF profile: %s", exc)
+
         log.info("BLE manager ready (ap_ip=%s, ap_iface=%s)", self._ap_ip, self._ap_interface)
         return True
 
@@ -449,6 +508,59 @@ class BleManager:
         )
         self._profile_registered = True
         log.info("RFCOMM profile registered (UUID: %s, channel: auto)", WAA_RFCOMM_UUID)
+
+    async def _register_hfp_hf_profile(self) -> None:
+        """Register an HFP Hands-Free (HF) client profile with BlueZ.
+
+        When Device1.Connect() is called on the phone, BlueZ connects this
+        HFP HF profile to the phone's HFP AG (UUID 0x111f).  Android detects
+        a car hands-free device and immediately triggers Android Auto, which
+        then initiates the WAA RFCOMM — matching OEM head unit behaviour.
+        """
+        from dbus_next.service import ServiceInterface, method
+        from dbus_next import Variant
+
+        class HfpHfProfile(ServiceInterface):
+            def __init__(self) -> None:
+                super().__init__("org.bluez.Profile1")
+
+            @method()
+            def Release(self):  # noqa: N802
+                pass
+
+            @method()
+            def NewConnection(self, device: "o", fd: "h", fd_properties: "a{sv}"):  # noqa: N802
+                duped = os.dup(fd)
+                log.info("HFP HF connected: %s — establishing SLC", device)
+                threading.Thread(
+                    target=_run_hfp_slc, args=(duped,), daemon=True
+                ).start()
+
+            @method()
+            def RequestDisconnection(self, device: "o"):  # noqa: N802
+                log.debug("HFP HF disconnected: %s", device)
+
+        self._hfp_hf_profile = HfpHfProfile()
+        self._bus.export(HFP_HF_PROFILE_PATH, self._hfp_hf_profile)
+
+        profile_mgr = self._bus.get_proxy_object(
+            BLUEZ_SERVICE, "/org/bluez",
+            await self._bus.introspect(BLUEZ_SERVICE, "/org/bluez"),
+        )
+        mgr = profile_mgr.get_interface(PROFILE_MANAGER_IFACE)
+        await mgr.call_register_profile(
+            HFP_HF_PROFILE_PATH,
+            HFP_HF_UUID,
+            {
+                "Channel": Variant("q", 0),
+                "AutoConnect": Variant("b", True),
+                "Role": Variant("s", "client"),
+                "Name": Variant("s", "Hands-Free"),
+                "Version": Variant("q", 0x0108),  # HFP 1.8
+                "Features": Variant("q", 0x0000),  # minimal — no HF features
+            },
+        )
+        log.info("HFP HF profile registered (UUID: %s)", HFP_HF_UUID)
 
     async def _register_ble_advertisement(self) -> None:
         """Register a BLE advertisement with the WAA service UUID."""
