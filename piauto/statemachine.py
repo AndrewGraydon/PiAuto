@@ -247,12 +247,13 @@ class StateMachine:
         # Retry every 30s in case the first attempt fired while the phone was
         # still off (e.g. after a phone reboot or coming into range).
         last_mac = self._ble.get_last_connected_mac()
+        reconnect_loop_task: asyncio.Task | None = None
         if last_mac:
             async def _reconnect_loop(mac: str) -> None:
                 while True:
                     await self._ble.try_reconnect_phone(mac)
                     await asyncio.sleep(30)
-            asyncio.create_task(_reconnect_loop(last_mac))
+            reconnect_loop_task = asyncio.create_task(_reconnect_loop(last_mac))
 
         # Monitor splash stdout for "SETUP" button press
         async def _watch_splash_stdout():
@@ -276,6 +277,12 @@ class StateMachine:
 
         for task in pending:
             task.cancel()
+
+        # Cancel the reconnect loop before leaving IDLE so it cannot send
+        # stray BT pages after the phone has connected.
+        if reconnect_loop_task and not reconnect_loop_task.done():
+            reconnect_loop_task.cancel()
+            await asyncio.gather(reconnect_loop_task, return_exceptions=True)
 
         if ignition_task in done:
             self._transition(State.SHUTDOWN, Event.IGNITION_OFF)
