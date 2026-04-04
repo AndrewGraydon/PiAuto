@@ -242,6 +242,12 @@ class StateMachine:
         # Start BLE advertising
         await self._ble.start_advertising()
 
+        # Proactively page the last paired phone so Android Auto initiates
+        # the RFCOMM session without the user having to open the app.
+        last_mac = self._ble.get_last_connected_mac()
+        if last_mac:
+            asyncio.create_task(self._ble.try_reconnect_phone(last_mac))
+
         # Monitor splash stdout for "SETUP" button press
         async def _watch_splash_stdout():
             while True:

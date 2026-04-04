@@ -666,6 +666,33 @@ class BleManager:
         """Get the MAC of the most recently connected phone."""
         return self._pairing_store.get_last_connected()
 
+    async def try_reconnect_phone(self, mac: str) -> None:
+        """Send a Classic BT page to a previously paired phone.
+
+        OEM head units auto-connect by paging the phone on boot — the phone
+        accepts the ACL link, Android Auto sees a known paired head unit has
+        appeared, and initiates the RFCOMM session back to our WAA profile.
+        Even if no outbound profiles connect (Pi is the RFCOMM server, not
+        client), the page alone is enough to wake Android Auto and trigger
+        the inbound RFCOMM connection.  Non-fatal if the phone is out of range.
+        """
+        if not self._bus:
+            return
+        dev_path = "/org/bluez/hci0/dev_" + mac.replace(":", "_")
+        try:
+            dev_intro = await self._bus.introspect("org.bluez", dev_path)
+            if not any(i.name == "org.bluez.Device1" for i in dev_intro.interfaces):
+                log.debug("Phone %s not in BlueZ cache — skipping auto-reconnect", mac)
+                return
+            dev = self._bus.get_proxy_object("org.bluez", dev_path, dev_intro)
+            dev_iface = dev.get_interface("org.bluez.Device1")
+            log.info("Auto-reconnect: paging last known phone %s", mac)
+            await asyncio.wait_for(dev_iface.call_connect(), timeout=15.0)
+        except asyncio.TimeoutError:
+            log.debug("Auto-reconnect to %s: page timed out (phone not in range)", mac)
+        except Exception as exc:
+            log.debug("Auto-reconnect to %s: %s", mac, exc)
+
     async def close(self) -> None:
         """Clean up RFCOMM fd and disconnect from D-Bus."""
         if self._rfcomm_fd is not None:
