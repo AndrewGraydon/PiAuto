@@ -662,6 +662,26 @@ class BleManager:
         """Persist a pairing record."""
         self._pairing_store.save_pairing(phone.mac, phone.name, timestamp)
 
+    async def trust_device(self, mac: str) -> None:
+        """Set Trusted=True on a BlueZ device so it auto-reconnects on future boots.
+
+        BlueZ auto-connects trusted devices when they come into range, matching
+        the behaviour of bt_pair.py for BT speakers. Without this the Pi must
+        wait for Android's BLE background scan (several minutes) each boot.
+        """
+        if not self._bus:
+            return
+        dev_path = "/org/bluez/hci0/dev_" + mac.replace(":", "_")
+        try:
+            from dbus_next import Variant
+            dev_intro = await self._bus.introspect("org.bluez", dev_path)
+            dev = self._bus.get_proxy_object("org.bluez", dev_path, dev_intro)
+            props = dev.get_interface("org.freedesktop.DBus.Properties")
+            await props.call_set("org.bluez.Device1", "Trusted", Variant("b", True))
+            log.info("Device %s marked Trusted in BlueZ", mac)
+        except Exception as exc:
+            log.debug("Failed to trust %s: %s", mac, exc)
+
     def get_last_connected_mac(self) -> str | None:
         """Get the MAC of the most recently connected phone."""
         return self._pairing_store.get_last_connected()
@@ -685,6 +705,13 @@ class BleManager:
                 log.debug("Phone %s not in BlueZ cache — skipping auto-reconnect", mac)
                 return
             dev = self._bus.get_proxy_object("org.bluez", dev_path, dev_intro)
+            # Ensure the device is trusted so BlueZ auto-connects on future boots
+            try:
+                from dbus_next import Variant as _Variant
+                props = dev.get_interface("org.freedesktop.DBus.Properties")
+                await props.call_set("org.bluez.Device1", "Trusted", _Variant("b", True))
+            except Exception:
+                pass
             dev_iface = dev.get_interface("org.bluez.Device1")
             log.info("Auto-reconnect: paging last known phone %s", mac)
             await asyncio.wait_for(dev_iface.call_connect(), timeout=15.0)

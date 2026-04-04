@@ -370,6 +370,7 @@ class StateMachine:
 
                 if success:
                     self._ble.save_pairing(self._current_phone, time.time())
+                    await self._ble.trust_device(self._current_phone.mac)
                     await self._ble.stop_advertising()
                     self._transition(State.WIFI_WAIT, Event.CREDENTIALS_SENT)
                 else:
