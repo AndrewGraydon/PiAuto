@@ -487,23 +487,35 @@ class StateMachine:
         if self._volume:
             await self._volume.start()
 
-        # Wait for OpenAuto to exit, projection stopped, ignition off, or a new
-        # RFCOMM connection (which means the phone dropped AA and is retrying).
-        # OpenAuto often stays running after a phone-side disconnect without
-        # producing any PROJECTION_STOPPED_PATTERNS — the new RFCOMM attempt is
-        # the reliable disconnect signal in that case.
+        # Three independent disconnect signals — whichever fires first wins:
+        #   1. RFCOMM reconnect attempt: phone disconnected AA in-app but stayed
+        #      BT+WiFi connected; Android immediately retries via RFCOMM.
+        #   2. WiFi AP leave: phone fully disconnected from the AP (e.g. BT
+        #      settings disconnect or range loss).
+        #   3. BlueZ BT disconnect: phone's Connected property went False.
+        # OpenAuto stdout patterns and process exit are kept as fallbacks.
         exit_task = asyncio.create_task(self._openauto.wait_for_exit())
         stopped_task = asyncio.create_task(
             self._openauto.wait_for_projection_stopped()
         )
         ignition_task = asyncio.create_task(self._ignition_off.wait())
         clock_task = asyncio.create_task(self._periodic_clock_save())
-        reconnect_task = asyncio.create_task(
-            self._ble.wait_for_rfcomm_during_projection()
+        rfcomm_task = asyncio.create_task(
+            self._ble.wait_for_rfcomm_reconnect_attempt()
+        )
+        bt_disconnect_task = asyncio.create_task(
+            self._ble.wait_for_phone_disconnect(self._current_phone.mac)
+        )
+        wifi_leave_task = asyncio.create_task(
+            self._wifi.wait_for_client_leave_ap()
+        )
+        tcp_end_task = asyncio.create_task(
+            self._openauto.wait_for_tcp_session_end()
         )
 
         done, pending = await asyncio.wait(
-            [exit_task, stopped_task, ignition_task, clock_task, reconnect_task],
+            [exit_task, stopped_task, ignition_task, clock_task,
+             rfcomm_task, bt_disconnect_task, wifi_leave_task, tcp_end_task],
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -518,19 +530,22 @@ class StateMachine:
             self._transition(State.SHUTDOWN, Event.IGNITION_OFF)
             return
 
-        if reconnect_task in done:
-            # Phone sent a new RFCOMM connection — it ended the AA session and
-            # is trying to restart.  Kill OpenAuto and return to IDLE so the
-            # next reconnect attempt is handled cleanly.
-            log.info("Phone reconnect attempt detected — returning to IDLE")
+        if rfcomm_task in done or bt_disconnect_task in done or wifi_leave_task in done or tcp_end_task in done:
+            if rfcomm_task in done:
+                reason = "RFCOMM reconnect attempt (in-app AA disconnect)"
+            elif tcp_end_task in done:
+                reason = "TCP session ended"
+            elif wifi_leave_task in done:
+                reason = "left WiFi AP"
+            else:
+                reason = "BT disconnected"
+            log.info("Phone %s — returning to IDLE", reason)
             await self._openauto.kill()
             await self._splash.launch("Waiting for phone...")
             self._transition(State.IDLE, Event.PHONE_DISCONNECTED)
             return
 
         if stopped_task in done:
-            # Phone disconnected but autoapp still running — kill it
-            # and return to splash
             log.info("Phone disconnected (projection stopped) — returning to IDLE")
             await self._openauto.kill()
             await self._splash.launch("Waiting for phone...")

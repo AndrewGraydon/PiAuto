@@ -726,22 +726,55 @@ class BleManager:
 
         return None
 
-    async def wait_for_rfcomm_during_projection(self) -> None:
-        """Block until a new RFCOMM connection arrives during an active session.
+    async def wait_for_phone_disconnect(self, mac: str) -> None:
+        """Block until the phone's BlueZ Connected property goes False.
 
-        During PROJECTION_ACTIVE, a new RFCOMM connection means the phone has
-        ended the AA session and is attempting to restart it (the phone sends
-        these periodically after disconnecting AA).  The fd is closed immediately
-        — IDLE will wait for the next one via wait_for_phone().
+        This is the most reliable disconnect signal: it fires regardless of
+        whether OpenAuto exits cleanly, whether the phone sends new RFCOMM
+        connections, or whether any stderr pattern matches.
+
+        Falls back to blocking forever (no-op) in mock mode.
+        """
+        if not self._bus:
+            await asyncio.get_running_loop().create_future()
+            return
+
+        dev_path = "/org/bluez/hci0/dev_" + mac.replace(":", "_")
+        disconnected = asyncio.Event()
+
+        def _on_props_changed(iface: str, changed: dict, invalidated: list) -> None:
+            if iface == "org.bluez.Device1" and "Connected" in changed:
+                connected_val = changed["Connected"]
+                # dbus_next wraps values in Variant; unwrap if needed
+                val = connected_val.value if hasattr(connected_val, "value") else connected_val
+                if not val:
+                    log.info("Phone %s disconnected (BlueZ Connected=False)", mac)
+                    disconnected.set()
+
+        try:
+            dev_intro = await self._bus.introspect("org.bluez", dev_path)
+            dev = self._bus.get_proxy_object("org.bluez", dev_path, dev_intro)
+            props_iface = dev.get_interface("org.freedesktop.DBus.Properties")
+            props_iface.on_properties_changed(_on_props_changed)
+            await disconnected.wait()
+        except Exception as exc:
+            log.debug("wait_for_phone_disconnect: %s — blocking until exit", exc)
+            await asyncio.get_running_loop().create_future()
+
+    async def wait_for_rfcomm_reconnect_attempt(self) -> None:
+        """Block until the phone sends a new RFCOMM connection during projection.
+
+        When the user disconnects AA from within the app (but the phone stays
+        BT and WiFi connected), Android Auto immediately starts retrying by
+        sending new RFCOMM connections.  This is the fastest signal in that
+        case.  The fd is closed — IDLE will consume the next connection via
+        wait_for_phone().
         """
         if not self._connection_queue:
-            await asyncio.get_running_loop().create_future()  # block forever
+            await asyncio.get_running_loop().create_future()
             return
         device_path, fd = await self._connection_queue.get()
-        log.info(
-            "New RFCOMM connection during projection — phone reconnecting: %s",
-            device_path,
-        )
+        log.info("RFCOMM reconnect attempt during projection from %s", device_path)
         try:
             os.close(fd)
         except OSError:

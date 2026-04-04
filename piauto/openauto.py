@@ -308,6 +308,53 @@ class OpenAutoManager:
 
         return stopped_task in done
 
+    async def wait_for_tcp_session_end(self, poll_interval: float = 3.0) -> None:
+        """Block until OpenAuto has no established TCP connections.
+
+        After a phone-side AA disconnect, autoapp drops its TCP session but
+        keeps running (showing its own waiting screen).  Polling `ss` for
+        ESTABLISHED connections on the autoapp pid is the most reliable way
+        to detect this when no stdout patterns match.
+        """
+        if not self._proc:
+            await asyncio.get_running_loop().create_future()
+            return
+
+        # Wait until an AA session IS established on port 5000
+        while True:
+            if self._proc.returncode is not None:
+                return
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "ss", "-tn", "src", ":5000",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _ = await proc.communicate()
+                if "ESTAB" in stdout.decode():
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(poll_interval)
+
+        # Now wait until the ESTABLISHED connection on port 5000 is gone
+        while True:
+            if self._proc.returncode is not None:
+                return
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "ss", "-tn", "src", ":5000",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _ = await proc.communicate()
+                if "ESTAB" not in stdout.decode():
+                    log.info("OpenAuto TCP session ended (port 5000 no longer ESTABLISHED)")
+                    return
+            except Exception:
+                pass
+            await asyncio.sleep(poll_interval)
+
     async def wait_for_exit(self) -> int | None:
         """Wait for OpenAuto to exit. Returns the exit code."""
         if not self._proc:

@@ -325,6 +325,25 @@ class WifiManager:
             pass
         return False
 
+    async def wait_for_client_leave_ap(self, poll_interval: float = 3.0) -> None:
+        """Block until the phone leaves the AP.
+
+        First waits until at least one client IS reachable (confirming the
+        phone has fully joined), then polls until no clients remain.  The
+        confirmation step prevents a false-positive fire during PROJECTION_ACTIVE
+        startup when the ARP entry may not yet be populated.
+        """
+        # Phase 1: wait until a client is confirmed present
+        while not await self._check_arp_client():
+            await asyncio.sleep(poll_interval)
+
+        # Phase 2: wait until no clients remain
+        while True:
+            if not await self._check_arp_client():
+                log.info("Phone left AP (no reachable clients on %s)", self._interface)
+                return
+            await asyncio.sleep(poll_interval)
+
     async def stop_ap(self) -> None:
         """Stop hostapd and dnsmasq, release interface."""
         was_running = False
