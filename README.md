@@ -223,9 +223,6 @@ This is a prototype/hobbyist project. The full specification suite is complete a
 - Config files written to `/run/piauto/` (tmpfs); WiFi password has no hardcoded default
 - Configurable logging (journald on Pi, stderr on dev) via `PIAUTO_LOG_LEVEL`
 
-**Known issues:**
-- Phone occasionally reconnects to house WiFi instead of PiAuto AP after idle period
-
 **Setup note:** Full power-loss resilience requires the BlueZ bind mount to be configured (`/data/bluetooth/ → /var/lib/bluetooth/`). See [Pi Setup Guide §6](docs/PiSetup.md) for the exact commands. Without this, an unexpected power cut will force re-pairing of phone and speaker on next boot.
 
 See [Known Issues](docs/TestPlan.md#27-known-issues) for full details.

@@ -720,7 +720,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-007 | DHCP Lease Assignment             | T      | Pass    | 2026-03-28 | Phone received IP on AP subnet |
 | TC-008 | TCP Listen Port 5000              | T      | Pass    | 2026-03-28 | Verified via `ss -tlnH` during BT_PAIRING |
 | TC-009 | TLS + Version + Service Discovery | T      | Pass    | 2026-03-28 | AA projection fully operational |
-| TC-010 | Reconnection on Loss              | T      | Partial | 2026-03-28 | AA disconnect+reconnect works; WiFi toggle causes phone to rejoin house WiFi instead of AP |
+| TC-010 | Reconnection on Loss              | T      | Pass    | 2026-04-04 | AA disconnect+reconnect works; fast disconnect detection returns to splash in ~3s |
 | TC-011 | H.264 Decode & Display            | D      | Pass    | 2026-03-29 | GSTVideoOutput rewrite working — full screen, Maps + Spotify rendering correctly |
 | TC-012 | PipeWire Audio Path               | T      | Pass    | 2026-03-28 | Audio through PipeWire → BT A2DP speaker |
 | TC-013 | Four Audio Streams                | D+I    | Pending |            |       |
@@ -777,6 +777,6 @@ This document defines the verification approach for every requirement in PiAuto-
 | :- | :------ | :------- | :--------- | :----- |
 | KI-001 | Audio stutter when notifications or Gemini trigger during music playback | Medium | RtAudio race condition — three audio stream instances (media, guidance, system) concurrently access shared RtAudio buffers without synchronization. | **Closed 2026-03-29** — RtAudio static mutex fix (PR #32) verified via TC-049. |
 | KI-002 | Video sizing and touch input broken with QtVideoOutput path on EGLFS | High | `QtVideoOutput` (QMediaPlayer + QVideoWidget) cannot render raw H.264 NAL units on EGLFS. | **Closed 2026-03-29** — `GSTVideoOutput` rewrite verified working. Full screen video rendering confirmed (TC-011, TC-051, TC-052). |
-| KI-003 | Phone occasionally reconnects to house WiFi instead of PiAuto AP | Low | After WiFi toggle or extended idle, phone's WiFi auto-join prioritizes known networks over PiAuto AP. Usually resolves after BT disconnect/reconnect cycle triggers fresh credential exchange. | Intermittent — workaround is BT reconnect cycle. |
+| KI-003 | ~~Phone occasionally reconnects to house WiFi instead of PiAuto AP~~ | — | Resolved — HFP reconnect + fast disconnect detection ensures phone reliably rejoins PiAuto AP. | Closed 2026-04-04. |
 | KI-004 | Connection setup time slightly exceeds 15s target | Low | PhoneDetected → PROJECTION_ACTIVE measured at 16s. WiFi join adds ~4s delay when phone must switch from house WiFi to PiAuto AP. | Superseded by KI-005. |
 | KI-005 | Connection setup time 16s exceeds 15s target (PR-005) | Low | WiFi join (~4s) when phone must switch from house WiFi to PiAuto AP. When phone is already on PiAuto AP, time is within target. | Accepted — intermittent condition only when phone must switch networks. TC-030 Fail. |
