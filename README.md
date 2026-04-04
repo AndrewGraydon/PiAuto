@@ -7,22 +7,30 @@ PiAuto turns a Raspberry Pi 4B and a 7-inch touchscreen into a standalone Wirele
 ## How It Works
 
 ```
-Phone ──BLE──► Pi (discover + pair)
+Phone ──BLE──► Pi (discover + pair, first time only)
+Phone ──BT HFP──► Pi (subsequent boots — triggers Android car mode)
 Phone ──WiFi──► Pi AP (5 GHz 802.11ac)
 Phone ──TCP/TLS──► OpenAuto (AA projection on port 5000)
 Pi ──BT A2DP──► Vehicle Speaker (audio output)
 ```
 
+**First pairing:**
 1. Pi advertises a Wireless Android Auto BLE service for discovery
 2. Phone pairs over Classic BT and receives Wi-Fi credentials via RFCOMM
 3. Phone joins the Pi's 5 GHz access point
 4. OpenAuto handles the AA session (video, audio, touch)
 5. Audio routes over Bluetooth A2DP to your vehicle speaker
 
+**Subsequent boots (auto-reconnect):**
+1. Pi pages the last known phone via Classic BT and registers an HFP Hands-Free profile
+2. Android detects the HFP device and enters car mode — Android Auto initiates RFCOMM automatically
+3. Phone joins the Pi's AP and projection begins within seconds, no user interaction required
+
 ## Features
 
 - **Wireless Android Auto** — no USB cable required
-- **Auto-reconnect** — Pi pages previously paired phones on boot (OEM-style Classic BT reconnect); Android Auto launches automatically without user interaction
+- **Auto-reconnect** — HFP Hands-Free profile triggers Android's car mode on boot; AA launches in <2 s, retries every 30 s until phone is in range; no user interaction required
+- **Fast disconnect detection** — return to splash within ~3 s of phone ending AA session via four independent signals (TCP session end, RFCOMM retry, WiFi AP leave, BlueZ BT disconnect)
 - **Multi-phone pairing** — stores up to 8 paired devices
 - **Touchscreen BT speaker setup** — on-screen UI for discovering and pairing Bluetooth speakers
 - **WiFi AP+STA** — simultaneous access point (for phone) and station (for SSH/internet) on one radio
@@ -75,7 +83,7 @@ The Python state machine orchestrates the connection lifecycle (BLE discovery, W
 piauto/
 ├── __main__.py       # Entry point: python -m piauto
 ├── statemachine.py   # Central orchestrator (8 states)
-├── ble.py            # BLE WAA advertising + RFCOMM credential exchange
+├── ble.py            # BLE WAA advertising, RFCOMM credential exchange, HFP HF reconnect
 ├── bt_pair.py        # BR/EDR speaker discovery and pairing (dbus-next)
 ├── wifi.py           # WiFi AP management (NM-managed AP+STA or hostapd+dnsmasq standalone)
 ├── gpio.py           # Ignition sense + fan PWM (libgpiod)
@@ -200,23 +208,20 @@ This is a prototype/hobbyist project. The full specification suite is complete a
 
 **Working:**
 - Full wireless Android Auto projection (BLE discovery → WiFi → TCP/TLS → video + audio)
-- Auto-reconnect — HFP Hands-Free profile triggers Android's car mode; AA launches in <2s on boot, retries every 30s if phone was off; no user interaction required
-- Return to splash on AA disconnect — four independent signals (TCP session end ~3s, RFCOMM retry, WiFi AP leave, BlueZ BT disconnect) ensure the splash screen returns promptly regardless of disconnect method
-- Bluetooth speaker discovery and pairing (BR/EDR via dbus-next, with touchscreen UI)
+- Auto-reconnect — HFP Hands-Free profile triggers Android's car mode; AA launches in <2 s on boot, retries every 30 s until phone is in range; no user interaction required
+- Fast disconnect detection — returns to splash screen within ~3 s of phone ending AA session; four independent signals cover all disconnect paths (in-app disconnect, BT settings, phone reboot, range loss)
+- Bluetooth speaker discovery and pairing (BR/EDR via dbus-next, touchscreen UI)
 - 4 concurrent AA audio streams (media, guidance, system, telephony) via PipeWire → BT A2DP
-- AVRCP volume sync (phone volume rocker → PipeWire → BT speaker)
+- AVRCP volume sync (phone volume rocker → PipeWire → BT speaker) using `dbus_next` async API
 - WiFi AP+STA on single radio (concurrent AP for phone and infrastructure WiFi for SSH), managed by NetworkManager
 - Splash screen with status display and BT Setup UI
 - State machine orchestration with full error recovery and retry logic
+- GSTVideoOutput — plain GStreamer C API (no qt-gstreamer); leaky post-decoder queue eliminates touch-to-screen latency; 30 FPS QTimer paint loop
+- Audio stutter fix — RtAudio static mutex eliminates concurrent buffer access race
+- Touch double-tap fix — libinput only; synthetic mouse events suppressed for touchscreen contacts
+- Hardened error routing — unhandled exceptions in TCP_CONNECT/PROJECTION_ACTIVE enter ERROR_RECOVERY (retry) instead of SHUTDOWN
+- Config files written to `/run/piauto/` (tmpfs); WiFi password has no hardcoded default
 - Configurable logging (journald on Pi, stderr on dev) via `PIAUTO_LOG_LEVEL`
-- GSTVideoOutput rewrite — plain GStreamer C API (no qt-gstreamer); leaky post-decoder queue eliminates touch-to-screen latency; 30 FPS QTimer paint loop decouples decode from Qt event queue
-- Audio stutter fix — RtAudio static mutex (OpenDsh PR #32) eliminates concurrent buffer access race
-- Touch double-tap fix — libinput used for input; `InputDevice.cpp` skips synthetic mouse events when a touchscreen is configured, preventing the double-tap caused by both QTouchEvent and synthetic QMouseEvent firing for each contact
-- AVRCP volume sync rewritten to `dbus_next` async API — D-Bus calls no longer block the asyncio event loop
-- Async correctness fixes — `asyncio.get_running_loop()` throughout; `asyncio.gather` for task drain; `subprocess.run` replaced with async in shutdown handler
-- Hardened error routing — unhandled exceptions in TCP_CONNECT/PROJECTION_ACTIVE now enter ERROR_RECOVERY (retry) instead of going directly to SHUTDOWN
-- Config files (`hostapd.conf`, `dnsmasq.conf`) written to `/run/piauto/` (tmpfs) instead of world-readable `/tmp`
-- WiFi password has no hardcoded default — missing password fails validation loudly, pointing to `/data/piauto.yaml`
 
 **Known issues:**
 - Phone occasionally reconnects to house WiFi instead of PiAuto AP after idle period
