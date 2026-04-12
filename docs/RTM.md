@@ -3,9 +3,9 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-RTM-001               |
-| Version        | 3.2                          |
-| Date           | 2026-03-29                   |
-| Status         | Draft                        |
+| Version        | 3.3                          |
+| Date           | 2026-04-11                   |
+| Status         | Active                       |
 
 ## 1. Introduction
 
@@ -102,6 +102,7 @@ This document traces every requirement in PiAuto-SRS-001 forward to the architec
 | NR-005 | Standard Android BT pairing   | BlueZ                        | Demonstration      | TC-002    |
 | NR-006 | Single YAML config file        | Config Manager               | Inspection         | TC-033    |
 | NR-007 | journald ring buffer logging   | Logger (systemd-journald)    | Inspection         | TC-033    |
+| NR-008 | Self-heal on BlueZ daemon crash | State Machine + BleManager (watch_bluez_restart) | Test | TC-058 |
 
 ---
 
@@ -109,7 +110,7 @@ This document traces every requirement in PiAuto-SRS-001 forward to the architec
 
 | Architecture Component   | Driving Requirements                    | Justified |
 | :----------------------- | :-------------------------------------- | :-------- |
-| State Machine (Python)   | All FR-*, NR-001, NR-004               | Yes       |
+| State Machine (Python)   | All FR-*, NR-001, NR-004, NR-008      | Yes       |
 | Config Manager           | FR-004, NR-006                          | Yes       |
 | Logger (journald)        | NR-007                                  | Yes       |
 | BlueZ (BLE + Classic)    | FR-001–005, FR-025, FR-026             | Yes       |

@@ -3,9 +3,9 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-SM-001                |
-| Version        | 3.5                          |
-| Date           | 2026-04-04                   |
-| Status         | Draft                        |
+| Version        | 3.6                          |
+| Date           | 2026-04-11                   |
+| Status         | Active                       |
 
 ## 1. Introduction
 
@@ -91,7 +91,7 @@ stateDiagram-v2
 
 | Property       | Value                                                         |
 | :------------- | :------------------------------------------------------------ |
-| Entry Actions  | Stop AP via `WifiManager.stop_ap()` (stops hostapd + dnsmasq if running in standalone mode; no-op in NM-managed mode). Kill OpenAuto (if running). Advertise WAA BLE service UUID (sets adapter `Discoverable=True`, `DiscoverableTimeout=0`, registers BLE advertisement). Attempt proactive Classic BT reconnect to last known phone (background task: `Device1.Connect()` establishes ACL + A2DP, then registers an HFP HF Profile1 — Android detects the HFP Hands-Free device, enters car mode, and immediately initiates the WAA RFCOMM session without user interaction, matching OEM head unit behaviour). Ensure splash screen is running ("Waiting for phone"). |
+| Entry Actions  | Stop AP via `WifiManager.stop_ap()` (stops hostapd + dnsmasq if running in standalone mode; no-op in NM-managed mode). Kill OpenAuto (if running). Advertise WAA BLE service UUID (sets adapter `Discoverable=True`, `DiscoverableTimeout=0`, registers BLE advertisement). Attempt proactive Classic BT reconnect to last known phone (background task: connects ACL, then registers an HFP HF Profile1 — Android detects the HFP Hands-Free device, enters car mode, and immediately initiates the WAA RFCOMM session without user interaction, matching OEM head unit behaviour. Note: `Device1.Connect()` is **not** called for audio devices during pairing to avoid a BlueZ 5.82 SEGV — see IG §21). Ensure splash screen is running ("Waiting for phone"). Monitor for BlueZ daemon crash via D-Bus `NameOwnerChanged` (`watch_bluez_restart()` task) — exit with code 1 on detection so systemd restarts piauto with a clean BT stack (see IG §22). |
 | Exit Actions   | Stop BLE advertising                                          |
 | Satisfies      | FR-001, FR-005, FR-036, NR-004                                |
 
@@ -178,7 +178,7 @@ stateDiagram-v2
 
 OpenAuto stdout patterns and process exit are retained as additional fallbacks.
 
-**PROJECTION_ACTIVE asyncio.wait pattern (8 tasks):** `exit_task`, `stopped_task`, `ignition_task`, `clock_task`, `tcp_end_task`, `rfcomm_task`, `bt_disconnect_task`, `wifi_leave_task`. First task to complete wins; all others are cancelled.
+**PROJECTION_ACTIVE asyncio.wait pattern (9 tasks):** `exit_task`, `stopped_task`, `ignition_task`, `clock_task`, `tcp_end_task`, `rfcomm_task`, `bt_disconnect_task`, `wifi_leave_task`, `bluez_task`. First task to complete wins; all others are cancelled. `bluez_task` (`watch_bluez_restart()`) fires if `bluetoothd` crashes — kills OpenAuto and exits so systemd can restart piauto cleanly (see IG §22).
 
 **IDLE reconnect retry loop:** On entering IDLE, a background `_reconnect_loop` task calls `try_reconnect_phone()` immediately, then every 30 s. This ensures the Pi pages the phone as soon as it comes back into BT range after being off — not just once on IDLE entry.
 

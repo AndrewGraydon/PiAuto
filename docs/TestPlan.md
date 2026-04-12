@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-TP-001                |
-| Version        | 4.3                          |
-| Date           | 2026-04-04                   |
+| Version        | 4.4                          |
+| Date           | 2026-04-11                   |
 | Status         | Active                       |
 
 ## 1. Introduction
@@ -768,6 +768,7 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-055 | Display Geometry Verification     | M      | Pass    | 2026-03-29 | VideoWidget confirmed 1024×600 via /tmp/vw_geom.txt; AA stream 800×480 |
 | TC-056 | EGLFS Window Stacking             | T      | Pass    | 2026-03-29 | MainWindow hidden on projection start; journal confirms "Hid window: QMainWindow" |
 | TC-057 | HFP HF Auto-Reconnect on Boot     | T      | Pass    | 2026-04-04 | HFP connected <1s on service restart; RFCOMM received <2s; 30s retry covers phone reboot |
+| TC-058 | BlueZ Crash Recovery              | T      | Pass    | 2026-04-11 | `sudo systemctl kill -s SIGKILL bluetooth` during PROJECTION_ACTIVE; piauto detected crash via NameOwnerChanged in <1s, killed OpenAuto, exited; systemd restarted piauto in 2s; full projection restored in ~20s. Also verified in IDLE state. |
 
 ---
 
@@ -780,3 +781,4 @@ This document defines the verification approach for every requirement in PiAuto-
 | KI-003 | ~~Phone occasionally reconnects to house WiFi instead of PiAuto AP~~ | — | Resolved — HFP reconnect + fast disconnect detection ensures phone reliably rejoins PiAuto AP. | Closed 2026-04-04. |
 | KI-004 | Connection setup time slightly exceeds 15s target | Low | PhoneDetected → PROJECTION_ACTIVE measured at 16s. WiFi join adds ~4s delay when phone must switch from house WiFi to PiAuto AP. | Superseded by KI-005. |
 | KI-005 | Connection setup time 16s exceeds 15s target (PR-005) | Low | WiFi join (~4s) when phone must switch from house WiFi to PiAuto AP. When phone is already on PiAuto AP, time is within target. | Accepted — intermittent condition only when phone must switch networks. TC-030 Fail. |
+| KI-006 | BlueZ 5.82 SEGV on Logi Dock pairing | High | `Device1.Connect()` during AVDTP codec negotiation raced WirePlumber endpoint registration on multi-profile devices (HFP+A2DP), causing a null-pointer dereference in bluetoothd. | **Closed 2026-04-11** — `bt_pair.py` no longer calls `Device1.Connect()`; WirePlumber auto-connects via `bluez5.auto-connect = [a2dp_sink]`. See IG §21. |

@@ -3,9 +3,9 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-SRS-001               |
-| Version        | 3.2                          |
-| Date           | 2026-03-29                   |
-| Status         | Draft                        |
+| Version        | 3.3                          |
+| Date           | 2026-04-11                   |
+| Status         | Active                       |
 
 ## 1. Introduction
 
@@ -253,6 +253,7 @@ Audio is routed from the Pi over Bluetooth A2DP to a vehicle speaker (or speaker
 | :----- | :----------------------------------------------------------------------------------------------------------- |
 | NR-006 | All configuration (SSID, password, fan thresholds) shall be defined in a single YAML configuration file on the writable partition. |
 | NR-007 | The system shall log operational events and errors to a journald ring buffer (volatile, not written to SD card). |
+| NR-008 | The system shall detect a Bluetooth daemon (`bluetoothd`) crash and automatically restart itself via systemd within 5 seconds so that all Bluetooth profile registrations are restored without user intervention. |
 
 ---
 

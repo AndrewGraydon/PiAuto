@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-PSG-001               |
-| Version        | 1.3                          |
-| Date           | 2026-04-04                   |
+| Version        | 1.4                          |
+| Date           | 2026-04-11                   |
 | Status         | Active                       |
 
 ## 1. Prerequisites
@@ -918,4 +918,5 @@ journalctl -t piauto -f
 | After overlayfs setup, phone/speaker requires re-pairing on every boot | BlueZ bind mount not configured | Check fstab (`grep bluetooth /etc/fstab`) and verify `/data/bluetooth/` is populated. Run `mount \| grep bluetooth` — if not mounted, the bind mount is missing. See §6.2.1. |
 | Splash screen doesn't return after disconnecting AA | Disconnect signals not firing | Check `journalctl -u piauto -f` during disconnect — look for "TCP session ended", "Phone left AP", or "Phone disconnected" log lines. If none appear, `ss`, `arp-scan`, or BlueZ D-Bus subscription may be failing. |
 | Phone doesn't auto-reconnect after reboot | HFP profile not registered | Check `journalctl -u piauto` for "HFP HF profile registered". Verify the phone is trusted in BlueZ: `bluetoothctl info XX:XX:XX:XX:XX:XX` — `Trusted: yes` must be set. |
+| BlueZ crashes and piauto stops working (no BLE, no reconnect) | `bluetoothd` crash left piauto with stale profile registrations | piauto detects this automatically via D-Bus `NameOwnerChanged` and exits so systemd can restart it. Check `journalctl -u piauto` for `[CRITICAL] BlueZ crashed/restarted`. If piauto is not restarting, verify `Restart=on-failure` and `RestartSec=2` in `piauto.service`. |
 | Phone auto-reconnects but starts BLE flow instead of HFP | `_hfp_hf_registered` flag not set | Restart piauto: `systemctl restart piauto`. If issue persists, verify the installed `ble.py` sets `self._hfp_hf_registered = True` at the end of `_register_hfp_hf_profile()`. |

@@ -3,9 +3,9 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-IG-001                |
-| Version        | 1.3                          |
-| Date           | 2026-03-29                   |
-| Status         | Draft                        |
+| Version        | 1.4                          |
+| Date           | 2026-04-11                   |
+| Status         | Active                       |
 
 ## 1. Introduction
 
@@ -457,16 +457,22 @@ fi
 
 After this change, the clock file is at most 5 minutes stale after a power cut (down from hours).
 
-**PROJECTION_ACTIVE asyncio.wait pattern (4 tasks):**
+**PROJECTION_ACTIVE asyncio.wait pattern (9 tasks — see §18.2 and §22 for the full set):**
 
 ```python
-exit_task    = asyncio.create_task(self._openauto.wait_for_exit())
-stopped_task = asyncio.create_task(self._openauto.wait_for_projection_stopped())
-ignition_task = asyncio.create_task(self._ignition_off.wait())
-clock_task   = asyncio.create_task(self._periodic_clock_save())
+exit_task          = asyncio.create_task(self._openauto.wait_for_exit())
+stopped_task       = asyncio.create_task(self._openauto.wait_for_projection_stopped())
+ignition_task      = asyncio.create_task(self._ignition_off.wait())
+clock_task         = asyncio.create_task(self._periodic_clock_save())
+rfcomm_task        = asyncio.create_task(self._ble.wait_for_rfcomm_reconnect_attempt())
+bt_disconnect_task = asyncio.create_task(self._ble.wait_for_phone_disconnect(mac))
+wifi_leave_task    = asyncio.create_task(self._wifi.wait_for_client_leave_ap())
+tcp_end_task       = asyncio.create_task(self._openauto.wait_for_tcp_session_end())
+bluez_task         = asyncio.create_task(self._ble.watch_bluez_restart())
 
 done, pending = await asyncio.wait(
-    [exit_task, stopped_task, ignition_task, clock_task],
+    [exit_task, stopped_task, ignition_task, clock_task,
+     rfcomm_task, bt_disconnect_task, wifi_leave_task, tcp_end_task, bluez_task],
     return_when=asyncio.FIRST_COMPLETED,
 )
 for task in pending:
@@ -664,9 +670,9 @@ When the phone ends an AA session, `autoapp` does **not** exit — it stays runn
 - **Phone reboot / BT settings disconnect**: BT Connected=False fires, but may be delayed by BT timeout (minutes).
 - **Range loss**: phone eventually leaves the WiFi AP (ARP table clears).
 
-### 18.2 Fix: Four Independent Disconnect Signals
+### 18.2 Fix: Multiple Independent Disconnect Signals
 
-`_handle_projection_active()` races eight asyncio tasks; whichever fires first causes the transition to IDLE:
+`_handle_projection_active()` races nine asyncio tasks; whichever fires first causes the transition to IDLE:
 
 **Primary signals (fastest):**
 
@@ -687,6 +693,8 @@ When the phone ends an AA session, `autoapp` does **not** exit — it stays runn
 7. **`ignition_task`**: GPIO 17 ignition-off → SHUTDOWN.
 
 8. **`clock_task`**: `_periodic_clock_save()` — loops forever, never fires first.
+
+9. **`bluez_task`** (`ble.py`): `watch_bluez_restart()` — fires if bluetoothd crashes or restarts. See §22.
 
 ### 18.3 IDLE Reconnect Retry Loop
 
@@ -829,3 +837,106 @@ WirePlumber is the authoritative owner of audio device connections. Its `bluez5.
 - **Confirmed affected:** Logi Dock (HFP + A2DP)
 - **Not affected:** simple A2DP-only speakers (e.g. standard Bluetooth audio receivers)
 - **Workaround if issue recurs:** remove the device from BlueZ (`bluetoothctl remove MAC`), reboot, then re-pair via the Setup UI
+
+---
+
+## 22. BlueZ Crash Watchdog
+
+### 22.1 Problem
+
+When `bluetoothd` crashes and systemd restarts it, all piauto D-Bus registrations are silently lost:
+
+- The RFCOMM WAA profile registration (`Profile1`) is gone — the phone can no longer connect.
+- The HFP HF profile registration is gone — auto-reconnect on the next phone entry stops working.
+- BlueZ's internal pairing agent is unregistered — new pairings will fail silently.
+
+piauto had no way to detect this: it continued running as if nothing happened, but the BT stack was in a broken state that required a manual service restart.
+
+This is not a theoretical edge case. `bluetoothd` 5.82 crashes on AVDTP race conditions (see §21) and may crash on other unexpected device behaviours. A consumer product must self-heal.
+
+### 22.2 Detection Mechanism
+
+`BleManager.watch_bluez_restart()` (`ble.py`) uses two complementary methods:
+
+**Primary — D-Bus `NameOwnerChanged` signal:**
+
+`org.freedesktop.DBus` fires `NameOwnerChanged(name, old_owner, new_owner)` whenever a service acquires or loses its D-Bus name. When `bluetoothd` crashes, `org.bluez` loses its name owner — `old_owner` is non-empty and `new_owner` is empty. This signal fires within milliseconds of the crash.
+
+```python
+dbus_intro = await self._bus.introspect("org.freedesktop.DBus", "/org/freedesktop/DBus")
+dbus_obj = self._bus.get_proxy_object("org.freedesktop.DBus", "/org/freedesktop/DBus", dbus_intro)
+dbus_iface = dbus_obj.get_interface("org.freedesktop.DBus")
+
+def _on_name_owner_changed(name, old_owner, new_owner):
+    if name == BLUEZ_SERVICE and old_owner:
+        restarted.set()
+
+dbus_iface.on_name_owner_changed(_on_name_owner_changed)
+```
+
+**Fallback — health-poll every 5 s:**
+
+If the signal subscription fails (e.g. D-Bus policy restriction), a background coroutine introspects `/org/bluez` every 5 seconds. A failed introspect (timeout or error) sets the same `restarted` event.
+
+```python
+async def _health_poll():
+    while not restarted.is_set():
+        await asyncio.sleep(5)
+        try:
+            await asyncio.wait_for(
+                self._bus.introspect(BLUEZ_SERVICE, "/org/bluez"), timeout=3.0
+            )
+        except Exception:
+            restarted.set()
+```
+
+Both paths set a shared `asyncio.Event`. `watch_bluez_restart()` awaits this event and returns when either path fires. The health-poll task is cancelled and the signal subscription is torn down when the event is set.
+
+### 22.3 Response
+
+When `watch_bluez_restart()` returns, the state machine logs a `CRITICAL` message, performs any necessary cleanup (kills OpenAuto if in PROJECTION_ACTIVE), and calls `sys.exit(1)`:
+
+```
+piauto.ble [WARNING] BlueZ name owner changed (:1.26 → none) — RFCOMM/HFP profile registrations lost
+piauto.statemachine [CRITICAL] BlueZ crashed/restarted — all profile registrations lost; exiting...
+```
+
+`piauto.service` has `Restart=on-failure` and `RestartSec=2`. Systemd restarts piauto 2 seconds after exit, which re-runs the full `BOOTING` sequence: re-registers the RFCOMM profile, HFP profile, and pairing agent with the now-fresh BlueZ instance.
+
+**Recovery timeline (observed):**
+- T+0: BlueZ killed (`SIGKILL`)
+- T+0: `NameOwnerChanged` fires; piauto logs CRITICAL, kills OpenAuto, exits
+- T+2s: systemd restarts piauto
+- T+4s: piauto in IDLE, all profiles re-registered, BLE advertising active, auto-reconnect loop running
+
+### 22.4 Why `sys.exit(1)` Instead of Re-registering In-Place
+
+Re-registering profiles in-place after a BlueZ restart is theoretically possible but fragile:
+
+- The existing D-Bus `MessageBus` connection is still valid (it's connected to the system D-Bus, not to BlueZ directly), but all proxy objects obtained before the crash are stale.
+- Every `BleManager` object that holds a proxy reference (`_adapter`, `_agent_mgr`, etc.) must be rebuilt from scratch.
+- `WifiManager`, `OpenAutoManager`, and other subsystems that made D-Bus calls may also hold stale references.
+- The state machine could be in any state (IDLE, BT_PAIRING, WIFI_WAIT, TCP_CONNECT, PROJECTION_ACTIVE) and would need per-state recovery logic.
+
+A clean process restart via systemd is simpler, guaranteed correct (Python starts with a clean heap), and fast enough (2s `RestartSec`) to be invisible to the user.
+
+### 22.5 Integration in State Machine
+
+`watch_bluez_restart()` runs as a concurrent task in **both** IDLE and PROJECTION_ACTIVE:
+
+**IDLE:**
+```python
+phone_task   = asyncio.create_task(self._ble.wait_for_phone())
+ignition_task = asyncio.create_task(self._ignition_off.wait())
+setup_task   = asyncio.create_task(_watch_splash_stdout())
+bluez_task   = asyncio.create_task(self._ble.watch_bluez_restart())
+
+done, _ = await asyncio.wait([phone_task, ignition_task, setup_task, bluez_task],
+                              return_when=asyncio.FIRST_COMPLETED)
+if bluez_task in done:
+    sys.exit(1)
+```
+
+**PROJECTION_ACTIVE:** `bluez_task` is the ninth task in the 9-task wait (§18.2). On fire: kill OpenAuto, then `sys.exit(1)`.
+
+States that do not block on a long-running `asyncio.wait` (BT_PAIRING, WIFI_WAIT, TCP_CONNECT, ERROR_RECOVERY) use bounded timeouts — a BlueZ crash in these states will surface as a BlueZ D-Bus error on the next call, which is caught and transitions to IDLE or SHUTDOWN normally. Adding the watchdog to these short-lived states would add complexity with minimal benefit.
