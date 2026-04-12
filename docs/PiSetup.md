@@ -453,6 +453,20 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
+### 8.6 Enable Persistent Journal Logging
+
+By default, systemd stores logs in RAM (`/run/log/journal/`) and they are lost on every reboot. Enable persistent logging so PiAuto session logs survive power cycles:
+
+```bash
+sudo mkdir -p /var/log/journal
+sudo chown root:systemd-journal /var/log/journal
+sudo chmod 2755 /var/log/journal
+echo 'Storage=persistent' | sudo tee -a /etc/systemd/journald.conf
+sudo systemctl restart systemd-journald
+```
+
+> Logs survive subsequent reboots and are accessible across boots via `journalctl -b -1` (previous boot). Limit total journal size if needed: add `SystemMaxUse=100M` to `/etc/systemd/journald.conf`.
+
 ---
 
 ## 9. PiAuto Python Package Installation
@@ -649,7 +663,10 @@ nmcli connection add type wifi ifname uap0 con-name piauto-ap \
   ipv6.method disabled
 ```
 
-> **Channel note:** The AP channel is determined at runtime by the station's channel (both must match because they share one radio). The `wifi.channel` setting in the NM profile is overridden by the driver.
+> **Channel note:** Set an explicit channel so the AP can start independently of the STA. Without a fixed channel, the AP follows the STA's channel — but if STA fails (e.g., home WiFi not in range), the AP may not start. Channel 48 (5240 MHz, 5GHz) is a good default; adjust to a channel your phone supports. Add `wifi.channel 48` to the `nmcli connection add` command above, or modify later:
+> ```bash
+> nmcli connection modify piauto-ap wifi.channel 48
+> ```
 
 > **Password note:** Change `piauto1234` to a stronger passphrase before deployment. The NM profile password and `/data/piauto.yaml` `wifi.password` must match — the RFCOMM credential exchange sends the value from the YAML config to the phone. Update both with:
 > ```bash
@@ -661,7 +678,7 @@ The `wlan0` STA connection is managed by the existing NM profile (e.g., `netplan
 
 ### 11.4 Create the Boot Service
 
-NetworkManager brings up connections on demand, but the AP+STA combination requires a retry loop to ensure both interfaces are active before PiAuto starts. Create `/etc/systemd/system/piauto-wifi.service`:
+NetworkManager brings up connections on demand, but the AP+STA combination requires explicit sequencing at boot. Create `/etc/systemd/system/piauto-wifi.service`:
 
 ```ini
 [Unit]
@@ -675,14 +692,27 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/bash -c '\
   for i in $(seq 1 30); do \
-    nmcli -t -f DEVICE,STATE dev | grep -q "uap0:connected" && \
-    nmcli -t -f DEVICE,STATE dev | grep -q "wlan0:connected" && break; \
+    ip link show wlan0 > /dev/null 2>&1 && ip link show uap0 > /dev/null 2>&1 && break; \
+    echo "Waiting for WiFi interfaces... (${i}s)"; \
     sleep 1; \
-  done'
+  done; \
+  echo "Bringing up STA (wlan0)..."; \
+  if nmcli con up netplan-wlan0-Graydons5G ifname wlan0 2>&1; then \
+    echo "STA connected"; \
+  else \
+    echo "STA failed -- disconnecting wlan0 so AP radio is stable"; \
+    nmcli device disconnect wlan0 2>&1 || true; \
+  fi; \
+  sleep 1; \
+  echo "Bringing up AP (uap0)..."; \
+  nmcli con up piauto-ap ifname uap0 2>&1 || true; \
+  echo "WiFi bringup complete"'
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+> **Important:** If the STA connection fails (e.g., the Pi is in a vehicle away from home WiFi), the script explicitly disconnects `wlan0` so it stops actively scanning. Without this, the BCM43455 radio stays in background-scan mode, which briefly takes the radio off the AP channel and makes the AP intermittently invisible to phones.
 
 Enable it:
 
@@ -797,9 +827,11 @@ Run these checks after setup to confirm everything is ready:
 | 22 | Config file | `cat /data/piauto.yaml` | valid YAML |
 | 23 | GStreamer H.264 decoder | `gst-inspect-1.0 v4l2h264dec \|\| gst-inspect-1.0 avdec_h264` | at least one found |
 | 24 | GStreamer appsrc/appsink | `gst-inspect-1.0 appsrc && gst-inspect-1.0 appsink` | both found |
-| 25 | aasdk fork | `git -C /opt/aasdk rev-parse HEAD 2>/dev/null \|\| git -C /tmp/aasdk rev-parse HEAD` | commit 7f84303 |
-| 26 | openauto fork | `git -C /opt/openauto rev-parse HEAD` | commit ee75ebc or later |
+| 25 | aasdk submodule | `git -C /opt/piauto/aasdk rev-parse --short HEAD` | matches build-info.txt |
+| 26 | openauto submodule | `git -C /opt/piauto/openauto rev-parse --short HEAD` | matches build-info.txt |
 | 27 | libinput disabled | `grep QT_QPA_EGLFS_NO_LIBINPUT /etc/systemd/system/piauto.service 2>/dev/null \|\| echo "set in subprocess env"` | variable is set |
+| 28 | Persistent journal | `grep Storage /etc/systemd/journald.conf` | Storage=persistent |
+| 29 | AP channel fixed | `nmcli -f 802-11-wireless.channel connection show piauto-ap` | 48 (or chosen channel) |
 
 ---
 
@@ -866,6 +898,7 @@ journalctl -t piauto -f
 | No splash screen | EGLFS can't acquire DRM | Check `/data/eglfs.json` device path. Ensure no other process holds DRM. |
 | BLE not advertising | BT soft-blocked or BlueZ not running | `rfkill unblock bluetooth && systemctl restart bluetooth`. Check `rfkill list`. |
 | Phone won't connect to PiAuto AP (AP+STA mode) | `uap0` not up or NM profile not connected | Run `nmcli device status`. If `uap0` is absent, check udev rule (`/etc/udev/rules.d/90-uap0.rules`). If `uap0` exists but is disconnected, run `nmcli connection up piauto-ap`. Check `systemctl status piauto-wifi`. |
+| PiAuto AP not visible in vehicle (away from home WiFi) | wlan0 background-scanning takes radio off AP channel | The BCM43455 radio scans for the home WiFi (e.g., `Graydons5G`) even when out of range — during each scan sweep the AP briefly disappears. Fix: ensure `piauto-wifi.service` disconnects wlan0 on STA failure (§11.4). Also set a fixed AP channel in the NM profile (`nmcli connection modify piauto-ap wifi.channel 48`). |
 | Phone won't connect to WiFi (standalone mode) | hostapd failed (bad channel/country) | Check `journalctl -u piauto` for hostapd errors. Verify `wifi.country` matches your region. |
 | No audio from speaker | A2DP not connected | `bluetoothctl connect XX:XX:XX:XX:XX:XX`. Check `wpctl status`. |
 | `profile-unavailable` on BT connect | WirePlumber A2DP endpoints not registered | Check WirePlumber is running: `systemctl --user status wireplumber`. Ensure seat monitoring is disabled (§10.2) and linger is enabled (§8.3). |
