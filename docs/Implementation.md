@@ -3,7 +3,7 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-IG-001                |
-| Version        | 1.4                          |
+| Version        | 1.5                          |
 | Date           | 2026-04-11                   |
 | Status         | Active                       |
 
@@ -477,9 +477,11 @@ done, pending = await asyncio.wait(
 )
 for task in pending:
     task.cancel()
+# Await cancellations so stray coroutines don't bleed into the next state
+await asyncio.gather(*pending, return_exceptions=True)
 ```
 
-`clock_task` never completes first in practice (it loops indefinitely). It is cancelled cleanly when one of the other three tasks fires.
+`clock_task` never completes first in practice (it loops indefinitely). It is cancelled cleanly when one of the other tasks fires. All cancelled tasks are awaited before the state transition to prevent stray D-Bus or subprocess calls leaking into the next state.
 
 ---
 
@@ -940,3 +942,75 @@ if bluez_task in done:
 **PROJECTION_ACTIVE:** `bluez_task` is the ninth task in the 9-task wait (§18.2). On fire: kill OpenAuto, then `sys.exit(1)`.
 
 States that do not block on a long-running `asyncio.wait` (BT_PAIRING, WIFI_WAIT, TCP_CONNECT, ERROR_RECOVERY) use bounded timeouts — a BlueZ crash in these states will surface as a BlueZ D-Bus error on the next call, which is caught and transitions to IDLE or SHUTDOWN normally. Adding the watchdog to these short-lived states would add complexity with minimal benefit.
+
+---
+
+## 23. Consumer-Grade Reliability Hardening
+
+Code review (2026-04-11) identified five reliability gaps that could cause silent failures or stray coroutines in a car environment. All are fixed in the same commit.
+
+### 23.1 PROJECTION_ACTIVE Pending Tasks Not Awaited
+
+**Problem:** After `asyncio.wait()` returns in `_handle_projection_active()`, cancelled tasks were not awaited. The pattern `for task in pending: task.cancel()` requests cancellation but does not wait for it to complete. Coroutines holding D-Bus subscriptions or subprocess handles could continue executing into the next state handler.
+
+**Fix:** Added `await asyncio.gather(*pending, return_exceptions=True)` immediately after the cancel loop, matching the pattern already used correctly in `_handle_idle()`.
+
+### 23.2 OpenAuto Monitor Task Crash Leaves Projection Undetectable
+
+**Problem:** `_monitor_output()` and `_monitor_stdout()` are the two background tasks that parse OpenAuto's output to set `_projection_active` and `_projection_stopped` events. Both have exception handlers that log and return — meaning if both tasks exit early (e.g. due to a subprocess pipe error), neither event is ever set. `wait_for_ready()` would then silently time out after 30 s rather than detecting the failure immediately.
+
+**Fix:** A `_monitor_guard()` coroutine is created alongside the two monitor tasks. It awaits both via `asyncio.gather(return_exceptions=True)`. If both exit before `_projection_active` is set, it sets `_projection_stopped` immediately. This ensures `wait_for_projection_stopped()` (running concurrently in PROJECTION_ACTIVE) fires quickly, causing a clean transition to IDLE rather than a silent 30 s wait.
+
+```python
+async def _monitor_guard() -> None:
+    await asyncio.gather(
+        self._monitor_task, self._stdout_task,
+        return_exceptions=True,
+    )
+    if not self._projection_active.is_set():
+        log.warning("Both OpenAuto monitor tasks exited before projection was active")
+        self._projection_stopped.set()
+
+asyncio.create_task(_monitor_guard())
+```
+
+### 23.3 Thermal Sensor Persistent Failure Silent After First Log
+
+**Problem:** If the thermal sensor (`/sys/class/thermal/thermal_zone0/temp`) becomes permanently unreadable, the monitor logs one warning at startup and then silently skips all fan control indefinitely. The fan holds its last duty cycle with no further indication that temperature monitoring has stopped.
+
+**Fix:** The polling loop now tracks consecutive read failures and logs a warning on the first failure and every 12th subsequent failure (~1 minute at 5 s poll interval). A recovery message is logged when the sensor becomes readable again.
+
+### 23.4 wpctl Subprocess Orphaned on CancelledError
+
+**Problem:** `_set_pipewire_volume()` in `volume.py` spawns a `wpctl set-volume` subprocess and awaits `proc.wait()`. If the enclosing task is cancelled while awaiting, the wpctl process is left running without cleanup. In practice wpctl finishes in under 50 ms, but over many volume changes accumulated orphan processes could exhaust system resources.
+
+**Fix:** The `await self._wpctl_proc.wait()` call is now wrapped in a try/except that kills the process and re-raises `CancelledError`:
+
+```python
+try:
+    await self._wpctl_proc.wait()
+except asyncio.CancelledError:
+    self._wpctl_proc.kill()
+    await self._wpctl_proc.wait()
+    raise
+```
+
+### 23.5 IDLE Reconnect Loop Exception Lost Without Context
+
+**Problem:** The `_reconnect_loop` background task in `_handle_idle()` called `try_reconnect_phone()` with no exception handler. `try_reconnect_phone()` has its own internal exception handler, but if it ever raised unexpectedly (e.g. an asyncio internal error), the loop would crash silently — visible only in the asyncio unhandled-exception logger, not the piauto journal.
+
+**Fix:** Added explicit exception handling in `_reconnect_loop`:
+
+```python
+async def _reconnect_loop(mac: str) -> None:
+    while True:
+        try:
+            await self._ble.try_reconnect_phone(mac)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Reconnect loop error for %s — will retry in 30 s", mac)
+        await asyncio.sleep(30)
+```
+
+`CancelledError` is re-raised so the task cancels cleanly when IDLE exits.

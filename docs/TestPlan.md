@@ -3,7 +3,7 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-TP-001                |
-| Version        | 4.4                          |
+| Version        | 4.5                          |
 | Date           | 2026-04-11                   |
 | Status         | Active                       |
 
@@ -769,6 +769,10 @@ This document defines the verification approach for every requirement in PiAuto-
 | TC-056 | EGLFS Window Stacking             | T      | Pass    | 2026-03-29 | MainWindow hidden on projection start; journal confirms "Hid window: QMainWindow" |
 | TC-057 | HFP HF Auto-Reconnect on Boot     | T      | Pass    | 2026-04-04 | HFP connected <1s on service restart; RFCOMM received <2s; 30s retry covers phone reboot |
 | TC-058 | BlueZ Crash Recovery              | T      | Pass    | 2026-04-11 | `sudo systemctl kill -s SIGKILL bluetooth` during PROJECTION_ACTIVE; piauto detected crash via NameOwnerChanged in <1s, killed OpenAuto, exited; systemd restarted piauto in 2s; full projection restored in ~20s. Also verified in IDLE state. |
+| TC-059 | Pending Task Cleanup on Disconnect | I     | Pass    | 2026-04-11 | Code inspection: `await asyncio.gather(*pending, return_exceptions=True)` present in both `_handle_idle()` and `_handle_projection_active()` after task cancel. No stray coroutine leakage between states. |
+| TC-060 | OpenAuto Monitor Guard            | I      | Pass    | 2026-04-11 | Code inspection: `_monitor_guard()` task set in `launch()`. If both `_monitor_task` and `_stdout_task` exit before `_projection_active` is set, `_projection_stopped` is set immediately — prevents 30 s silent timeout. |
+| TC-061 | Thermal Sensor Failure Logging    | I      | Pass    | 2026-04-11 | Code inspection: `_read_failures` counter logs warning on first failure and every 12th subsequent failure; logs recovery when sensor returns. Fan held at last duty during failure — safe (holds rather than switching off). |
+| TC-062 | wpctl Subprocess Cleanup          | I      | Pass    | 2026-04-11 | Code inspection: `CancelledError` during `_wpctl_proc.wait()` now kills the process before re-raising. No orphan wpctl processes on task cancellation. |
 
 ---
 

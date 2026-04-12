@@ -3,7 +3,7 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-SM-001                |
-| Version        | 3.6                          |
+| Version        | 3.7                          |
 | Date           | 2026-04-11                   |
 | Status         | Active                       |
 
@@ -178,9 +178,9 @@ stateDiagram-v2
 
 OpenAuto stdout patterns and process exit are retained as additional fallbacks.
 
-**PROJECTION_ACTIVE asyncio.wait pattern (9 tasks):** `exit_task`, `stopped_task`, `ignition_task`, `clock_task`, `tcp_end_task`, `rfcomm_task`, `bt_disconnect_task`, `wifi_leave_task`, `bluez_task`. First task to complete wins; all others are cancelled. `bluez_task` (`watch_bluez_restart()`) fires if `bluetoothd` crashes — kills OpenAuto and exits so systemd can restart piauto cleanly (see IG §22).
+**PROJECTION_ACTIVE asyncio.wait pattern (9 tasks):** `exit_task`, `stopped_task`, `ignition_task`, `clock_task`, `tcp_end_task`, `rfcomm_task`, `bt_disconnect_task`, `wifi_leave_task`, `bluez_task`. First task to complete wins; all others are cancelled and awaited (`await asyncio.gather(*pending, return_exceptions=True)`) before the state transition so stray coroutines cannot bleed into the next state. `bluez_task` (`watch_bluez_restart()`) fires if `bluetoothd` crashes — kills OpenAuto and exits so systemd can restart piauto cleanly (see IG §22).
 
-**IDLE reconnect retry loop:** On entering IDLE, a background `_reconnect_loop` task calls `try_reconnect_phone()` immediately, then every 30 s. This ensures the Pi pages the phone as soon as it comes back into BT range after being off — not just once on IDLE entry.
+**IDLE reconnect retry loop:** On entering IDLE, a background `_reconnect_loop` task calls `try_reconnect_phone()` immediately, then every 30 s. Unexpected exceptions are caught and logged (then retried after 30 s) so a single transient error does not silently kill the loop. `CancelledError` is re-raised so the task cancels cleanly when IDLE exits.
 
 ### 3.7 ERROR_RECOVERY
 

@@ -253,7 +253,12 @@ class StateMachine:
         if last_mac:
             async def _reconnect_loop(mac: str) -> None:
                 while True:
-                    await self._ble.try_reconnect_phone(mac)
+                    try:
+                        await self._ble.try_reconnect_phone(mac)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        log.exception("Reconnect loop error for %s — will retry in 30 s", mac)
                     await asyncio.sleep(30)
             reconnect_loop_task = asyncio.create_task(_reconnect_loop(last_mac))
 
@@ -546,6 +551,9 @@ class StateMachine:
 
         for task in pending:
             task.cancel()
+
+        # Await cancellations so stray coroutines don't bleed into the next state
+        await asyncio.gather(*pending, return_exceptions=True)
 
         # Stop volume sync when leaving PROJECTION_ACTIVE
         if self._volume:

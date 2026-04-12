@@ -75,13 +75,26 @@ class ThermalMonitor:
 
         log.info("Thermal monitoring started (poll every %d s)", interval)
 
+        _read_failures = 0
         while self._running:
             temp = self._read_temp()
             if temp is not None:
+                if _read_failures > 0:
+                    log.info("Thermal sensor recovered after %d failed read(s)", _read_failures)
+                _read_failures = 0
                 duty = self._compute_duty(temp)
                 self._fan_on = duty > 0
                 self._gpio.set_fan_duty(duty)
                 log.debug("CPU %.1f C → fan %d%%", temp, duty)
+            else:
+                _read_failures += 1
+                # Log on first failure and every 12 subsequent failures (~1 min at 5s poll)
+                if _read_failures == 1 or _read_failures % 12 == 0:
+                    log.warning(
+                        "Cannot read thermal sensor (%s) — fan held at last duty "
+                        "(failure count: %d)",
+                        THERMAL_ZONE, _read_failures,
+                    )
 
             await asyncio.sleep(interval)
 

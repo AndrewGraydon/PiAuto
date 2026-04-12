@@ -113,6 +113,11 @@ class VolumeSyncManager:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await self._wpctl_proc.wait()
+            try:
+                await self._wpctl_proc.wait()
+            except asyncio.CancelledError:
+                self._wpctl_proc.kill()
+                await self._wpctl_proc.wait()
+                raise
         except FileNotFoundError:
             log.debug("wpctl not found")

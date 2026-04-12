@@ -164,6 +164,24 @@ class OpenAutoManager:
         self._monitor_task = asyncio.create_task(self._monitor_output())
         self._stdout_task = asyncio.create_task(self._monitor_stdout())
 
+        # If both monitor tasks crash before setting _projection_active,
+        # wait_for_ready() would silently time out after 30 s rather than
+        # detecting the failure immediately. Guard against this by setting
+        # _projection_stopped when both monitors have exited unexpectedly.
+        async def _monitor_guard() -> None:
+            await asyncio.gather(
+                self._monitor_task, self._stdout_task,
+                return_exceptions=True,
+            )
+            if not self._projection_active.is_set():
+                log.warning(
+                    "Both OpenAuto monitor tasks exited before projection was "
+                    "active — marking projection stopped for fast disconnect detection"
+                )
+                self._projection_stopped.set()
+
+        asyncio.create_task(_monitor_guard())
+
         return True
 
     async def _monitor_stdout(self) -> None:

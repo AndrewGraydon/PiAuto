@@ -3,7 +3,7 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-ARCH-001              |
-| Version        | 3.2                          |
+| Version        | 3.3                          |
 | Date           | 2026-04-11                   |
 | Status         | Active                       |
 
@@ -175,7 +175,7 @@ graph TD
   - aasdk implements the full AA protocol including version negotiation, service discovery, 14 AA service types, audio focus management, and sensor reporting.
   - The Crankshaft ecosystem provides years of community testing on Raspberry Pi hardware.
 - **OpenAuto runs as a child process** of the Python state machine. The state machine starts OpenAuto when entering TCP_CONNECT (after the phone joins the AP) and monitors it. When OpenAuto exits (clean disconnect or error), the state machine resumes control.
-- OpenAuto communicates status back to the Python orchestrator via its **exit code** and **log output** (parsed from stderr).
+- OpenAuto communicates status back to the Python orchestrator via its **exit code** and **log output** (parsed from stderr via two background monitor tasks). A `_monitor_guard()` coroutine watches both monitor tasks — if both exit before projection is active (e.g. due to a pipe error), it immediately sets `_projection_stopped` so the state machine detects the failure in <3 s rather than after a 30 s timeout (see IG §23.2).
 
 ### 4.4 Layer 4: Media
 
