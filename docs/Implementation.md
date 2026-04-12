@@ -351,6 +351,20 @@ The BT setup view (activated by `BT_SETUP` stdin command) provides a touchscreen
 
 > **Note:** The bt_pair subprocess is launched as the `pi` user via `sudo -u pi` because BR/EDR discovery as root misses some devices due to BlueZ D-Bus policy differences.
 
+### 9.4 bt_pair: Why Connect() Is Not Called
+
+`bt_pair pair` intentionally does **not** call `Device1.Connect()` after pairing and trusting the device. Instead it waits for WirePlumber to auto-connect and reports `PAIR_OK` regardless.
+
+**Background:** An earlier version called `Device1.Connect()` after `Device1.Pair()`. This worked on simple A2DP-only speakers but caused **bluetoothd 5.82 to SEGV** on devices that advertise multiple profiles simultaneously (e.g. Logi Dock, which advertises both HFP and A2DP). The crash occurred inside BlueZ's AVDTP codec negotiation — `bt_pair` was calling `Connect()` at the same moment WirePlumber was registering its A2DP endpoints, creating a race in BlueZ's internal profile state machine.
+
+**Current approach:**
+1. `Device1.Pair()` — exchange link keys
+2. `Trusted = True` — required for WirePlumber `auto-connect` and for BlueZ `AutoConnect` to fire reliably
+3. Wait up to 12 s for `Device1.Connected` to go `True` (WirePlumber auto-connects via `bluez5.auto-connect = [ a2dp_sink ]`)
+4. Report `PAIR_OK` whether or not WirePlumber connected within the window — a paired and trusted device will connect automatically on next boot or range entry
+
+This avoids the SEGV, removes the race with WirePlumber, and correctly separates concerns: bt_pair owns pairing; WirePlumber owns audio device connections.
+
 ### 9.4 SIGTERM Handling
 
 Qt's event loop blocks in `app.exec_()`, so SIGTERM cannot call `app.quit()` directly from a signal handler. The splash uses a `socket.socketpair()` with a `QSocketNotifier` to relay SIGTERM into Qt's event loop safely.
@@ -773,3 +787,45 @@ This grants user `pi` permission to send method calls and property reads to the 
 ```bash
 systemctl reload dbus
 ```
+
+---
+
+## 21. BlueZ 5.82 SEGV on Multi-Profile Device Connect
+
+### 21.1 Symptom
+
+Pairing a device that advertises multiple Bluetooth profiles simultaneously (e.g. Logi Dock: HFP + A2DP) causes `bluetoothd` to crash with SIGSEGV:
+
+```
+bluetooth.service: Main process exited, code=killed, status=11/SEGV
+bluetooth.service: Failed with result 'signal'.
+bluetooth.service: Scheduled restart job immediately on client request
+```
+
+From `bt_pair`'s perspective the error is:
+```
+PAIR_FAIL|Connect failed: Message recipient disconnected from message bus without replying
+```
+
+The "recipient disconnected" is bluetoothd crashing before it can reply to the D-Bus `Connect()` call.
+
+### 21.2 Root Cause
+
+The crash occurs inside BlueZ's AVDTP (A2DP) codec negotiation when `bt_pair` calls `Device1.Connect()` at the same moment WirePlumber is registering its A2DP media endpoints. Both operations touch BlueZ's internal profile state machine concurrently, hitting a null-pointer dereference in bluetoothd 5.82.
+
+The race only manifests on devices with multiple profiles because:
+- Simple A2DP-only speakers: BlueZ negotiates only one profile — no race window
+- HFP + A2DP devices: BlueZ tries to negotiate both profiles simultaneously, widening the window where WirePlumber's endpoint registration collides with the connect path
+
+### 21.3 Fix
+
+`bt_pair` no longer calls `Device1.Connect()`. See §9.4 for the full rationale and implementation.
+
+WirePlumber is the authoritative owner of audio device connections. Its `bluez5.auto-connect = [ a2dp_sink ]` configuration (in `~/.config/wireplumber/wireplumber.conf.d/50-bluez-config.conf`) causes it to connect the A2DP sink profile automatically after a device is paired and trusted — without any explicit `Connect()` call from application code.
+
+### 21.4 Affected Versions / Devices
+
+- **BlueZ version:** 5.82 (Debian 13 / Trixie package)
+- **Confirmed affected:** Logi Dock (HFP + A2DP)
+- **Not affected:** simple A2DP-only speakers (e.g. standard Bluetooth audio receivers)
+- **Workaround if issue recurs:** remove the device from BlueZ (`bluetoothctl remove MAC`), reboot, then re-pair via the Setup UI

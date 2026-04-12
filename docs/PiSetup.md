@@ -906,6 +906,7 @@ journalctl -t piauto -f
 | `bluetoothctl scan` finds nothing (BR/EDR) | D-Bus connection drops too quickly | Use `python3 -m piauto.bt_pair scan` instead — it keeps the D-Bus connection alive (§10.3). |
 | BT scan as root misses devices | BlueZ D-Bus policy differs for root | Run bt_pair as pi user: `sudo -u pi python3 -m piauto.bt_pair scan`. The service does this automatically. |
 | `br-connection-busy` on BT connect | Stale ACL connection from previous attempt | Disconnect first: `bluetoothctl disconnect XX:XX:XX:XX:XX:XX`, wait 3s, then retry. |
+| Speaker pairing fails with "Message recipient disconnected" / BlueZ SEGV | BlueZ 5.82 crash during multi-profile connect (HFP+A2DP devices, e.g. Logi Dock) | This is a known BlueZ 5.82 bug. `bt_pair` no longer calls `Device1.Connect()` to avoid it — WirePlumber auto-connects instead. If you see this with the current code, remove the device (`bluetoothctl remove MAC`), reboot, and re-pair. See Implementation Guide §21. |
 | Boot timeout (60 s) | Service dependency not met | Check which service failed: `systemctl --failed`. |
 | OpenAuto crash / `libopenauto.so.2` not found | Library not at RPATH | Verify `/opt/openauto/lib/libopenauto.so.2` exists. The binary RPATH points there; do not move or rename the lib directory. |
 | OpenAuto crash / DRM issue | DRM access or missing plugins | Run `/usr/local/bin/autoapp` manually and check stderr. |
