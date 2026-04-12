@@ -3,9 +3,9 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-ICD-001               |
-| Version        | 3.1                          |
-| Date           | 2026-03-29                   |
-| Status         | Draft                        |
+| Version        | 3.2                          |
+| Date           | 2026-04-11                   |
+| Status         | Active                       |
 
 ## 1. Introduction
 
@@ -184,11 +184,15 @@ Serialized as Protocol Buffers, transmitted via RFCOMM.
 
 ### 3.10 Auto-Reconnect Behavior
 
-On entering IDLE, the system checks the paired device list (ordered by last-connected timestamp). For the most recent device:
+On entering IDLE, the system checks the paired device list (ordered by last-connected timestamp). For the most recent device, a proactive Classic BT reconnect is attempted in a background loop (every 30 s):
 
-1. Send directed BLE advertisements targeting the known device.
-2. If the device responds within 10 seconds, the phone connects to the RFCOMM profile directly (already paired) and credential exchange proceeds without re-pairing.
-3. If not found within 10 seconds, fall back to general undirected BLE advertising.
+1. **ACL connect:** Call BlueZ `Device1.Connect()` on the known phone's device path. This pages the phone and establishes the Classic BT ACL link.
+2. **HFP HF registration:** Immediately after `Device1.Connect()` returns, register an HFP Hands-Free (`Profile1`) with BlueZ if not already registered (`AutoConnect=True`, `Role=client`). Android detects the HFP HF device and enters car mode — this triggers Android Auto to initiate the WAA RFCOMM session to the Pi's registered RFCOMM profile without any user interaction.
+3. **RFCOMM receive:** `Profile1.NewConnection` fires on the WAA RFCOMM profile; the state machine picks up the connection and transitions to BT_PAIRING normally.
+
+BLE advertising (undirected) runs concurrently as a discovery fallback for first-time pairings. The reconnect loop is cancelled as soon as `phone_task` fires.
+
+**Note:** `Device1.Connect()` is used here only for the phone (audio stream) connection, not for BT speaker audio devices. Speaker audio connects are delegated entirely to WirePlumber to avoid a BlueZ 5.82 SEGV on multi-profile devices (see §10.2 and IG §21).
 
 ---
 
@@ -636,7 +640,7 @@ The Python state machine (`piauto-main`) communicates with system services and m
 
 | Target         | Mechanism                  | Operations                         |
 | :------------- | :------------------------- | :--------------------------------- |
-| BlueZ          | D-Bus (system bus)         | Register BLE advertisement (WAA UUID), RFCOMM Profile1 (credential exchange), pair, manage paired devices, monitor A2DP sink |
+| BlueZ          | D-Bus (system bus)         | Register BLE advertisement (WAA UUID), RFCOMM Profile1 (credential exchange), HFP HF Profile1 (auto-reconnect), pair, manage paired devices, monitor A2DP sink. Subscribe to `org.freedesktop.DBus` `NameOwnerChanged` signal to detect `bluetoothd` crashes — exits with code 1 on detection so systemd can restart with a clean BT stack (see IG §22). |
 | hostapd        | systemd D-Bus + config file| Start/stop service, write hostapd.conf dynamically |
 | dnsmasq        | systemd D-Bus + config file| Start/stop alongside hostapd       |
 | OpenAuto       | Process management (fork/exec) | Launch with command-line args (resolution, audio config). Monitor process. Parse stderr for status events. Detect exit code for clean vs error shutdown. |
