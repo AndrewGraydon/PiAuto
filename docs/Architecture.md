@@ -3,9 +3,9 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-ARCH-001              |
-| Version        | 3.1                          |
-| Date           | 2026-03-29                   |
-| Status         | Draft                        |
+| Version        | 3.2                          |
+| Date           | 2026-04-11                   |
+| Status         | Active                       |
 
 ## 1. Introduction
 
@@ -118,7 +118,7 @@ graph TD
 
 | Component       | Technology          | Satisfies          | Description |
 | :-------------- | :------------------ | :----------------- | :---------- |
-| State Machine   | Python 3.11+        | All FR-*           | Implements the state machine defined in PiAuto-SM-001. Manages BLE advertising, hostapd lifecycle, and OpenAuto process. |
+| State Machine   | Python 3.11+        | All FR-*, NR-001, NR-008 | Implements the state machine defined in PiAuto-SM-001. Manages BLE advertising, hostapd lifecycle, and OpenAuto process. Monitors for `bluetoothd` crashes via D-Bus `NameOwnerChanged` signal (NR-008) — exits with code 1 on detection so systemd restarts piauto with a clean BT stack. |
 | Config Manager  | Python / PyYAML     | NR-006             | Reads `/data/piauto.yaml` on the writable partition. Provides SSID, password, fan thresholds, and paired device list to all components. |
 | Logger          | systemd-journald    | NR-007             | All components log via journald. Ring buffer in volatile storage (tmpfs). No writes to SD card. |
 
@@ -134,7 +134,7 @@ graph TD
 
 | Component       | Technology          | Satisfies              | Description |
 | :-------------- | :------------------ | :--------------------- | :---------- |
-| BlueZ           | BlueZ 5.x (D-Bus)  | FR-001 to FR-005, FR-025, FR-026 | Handles BLE WAA advertisement (discovery), RFCOMM Profile1 (credential exchange), Classic BT A2DP audio sink, and paired device storage. |
+| BlueZ           | BlueZ 5.x (D-Bus)  | FR-001 to FR-005, FR-025, FR-026 | Handles BLE WAA advertisement (discovery), RFCOMM Profile1 (WAA credential exchange), HFP HF Profile1 (OEM-style auto-reconnect — triggers Android car mode on boot), Classic BT A2DP audio sink (managed by WirePlumber), and paired device storage. Note: `Device1.Connect()` is intentionally not called for audio devices — WirePlumber owns audio connections to avoid a BlueZ 5.82 SEGV on multi-profile devices (see IG §21). |
 | NetworkManager  | NetworkManager      | FR-006 to FR-010       | Manages the WiFi AP+STA configuration. The `uap0` virtual AP interface (SSID: PiAuto, 192.168.50.1/24) is created by a udev rule and managed by NM profile `piauto-ap`. `wlan0` STA remains connected to infrastructure WiFi. Both connections are brought up at boot by `piauto-wifi.service`. |
 | hostapd         | hostapd 2.10+       | FR-006 to FR-009       | Used in standalone (non-NM) mode only. When `uap0` is present and NM-managed, the Python `WifiManager` detects this via `_check_nm_managed_ap()` and skips hostapd/dnsmasq entirely. |
 | dnsmasq         | dnsmasq             | FR-010                 | Used in standalone (non-NM) mode only. In AP+STA mode, NetworkManager's built-in DHCP handles the `uap0` interface. |
@@ -297,7 +297,7 @@ All processes except `piauto-main` are managed as systemd services. `piauto-main
 2. **IDLE:** `piauto-main` advertises BLE, launches splash Qt process (single long-lived process with `QStackedWidget` for view switching). User can tap "Setup" to enter BT speaker pairing without restarting the process.
 3. **BT_PAIRING:** `piauto-main` calls `WifiManager.start_ap()`. In AP+STA mode, this detects that NetworkManager already has the `uap0` AP active and returns immediately (no hostapd/dnsmasq needed). In standalone mode, `piauto-main` launches `hostapd` + `dnsmasq` on `wlan0`.
 4. **TCP_CONNECT:** `piauto-main` kills the splash process (releases DRM master), launches `openauto` (Qt EGLFS). OpenAuto takes over the display and listens on TCP 5000.
-5. **PROJECTION_ACTIVE:** OpenAuto handles everything. `piauto-main` monitors OpenAuto's process and GPIO 17. A background `_periodic_clock_save()` task also runs, saving the current time to `/data/clock` every 5 minutes so that an unexpected power cut leaves the clock file at most 5 minutes stale.
+5. **PROJECTION_ACTIVE:** OpenAuto handles everything. `piauto-main` races nine concurrent monitoring tasks: OpenAuto exit, projection-stopped stdout pattern, ignition-off, periodic clock save (every 5 min), RFCOMM reconnect attempt, BT disconnect, WiFi AP leave, TCP session end, and BlueZ crash watchdog. Whichever fires first drives the next transition. If the BlueZ watchdog fires (`bluetoothd` crashed), OpenAuto is killed and `piauto-main` exits with code 1 so systemd can restart with a fresh BT stack.
 6. **Disconnect:** OpenAuto exits. `piauto-main` reclaims the display (relaunches splash), stops `hostapd`, returns to IDLE.
 7. **Shutdown:** `piauto-main` kills all child processes, runs `shutdown -h now`.
 
