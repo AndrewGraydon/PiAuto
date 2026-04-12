@@ -641,6 +641,82 @@ class BleManager:
             log.error("Failed to start BLE advertising: %s", exc)
             self._advertising = False
 
+    async def watch_bluez_restart(self) -> None:
+        """Block until BlueZ crashes or restarts, then return.
+
+        Subscribes to the D-Bus NameOwnerChanged signal for org.bluez so that
+        a bluetoothd SEGV or restart is detected within milliseconds. A 5-second
+        health poll runs concurrently as a fallback in case signal delivery is
+        unreliable.
+
+        When this coroutine returns, all profile registrations (RFCOMM, HFP HF,
+        pairing agent) are invalid. The caller should reinitialize the stack —
+        in practice by exiting piauto and letting systemd restart it.
+        """
+        if self._bus is None:
+            await asyncio.sleep(float("inf"))  # mock mode: watchdog never fires
+            return
+
+        restarted = asyncio.Event()
+
+        # ── Signal: NameOwnerChanged from org.freedesktop.DBus ───────────
+        try:
+            dbus_intro = await self._bus.introspect(
+                "org.freedesktop.DBus", "/org/freedesktop/DBus"
+            )
+            dbus_obj = self._bus.get_proxy_object(
+                "org.freedesktop.DBus", "/org/freedesktop/DBus", dbus_intro
+            )
+            dbus_iface = dbus_obj.get_interface("org.freedesktop.DBus")
+
+            def _on_name_owner_changed(name: str, old_owner: str, new_owner: str) -> None:
+                if name == BLUEZ_SERVICE and old_owner:
+                    # old_owner non-empty means BlueZ previously owned the name.
+                    # Whether new_owner is empty (crash, not yet restarted) or
+                    # non-empty (already restarted), our registrations are gone.
+                    log.warning(
+                        "BlueZ name owner changed (%s → %s) — "
+                        "RFCOMM/HFP profile registrations lost",
+                        old_owner, new_owner or "none",
+                    )
+                    restarted.set()
+
+            dbus_iface.on_name_owner_changed(_on_name_owner_changed)
+        except Exception as exc:
+            log.warning("watch_bluez_restart: cannot subscribe to NameOwnerChanged: %s", exc)
+            dbus_iface = None
+
+        # ── Fallback: 5 s health poll ─────────────────────────────────────
+        async def _health_poll() -> None:
+            while not restarted.is_set():
+                await asyncio.sleep(5)
+                if restarted.is_set():
+                    break
+                try:
+                    await asyncio.wait_for(
+                        self._bus.introspect(BLUEZ_SERVICE, "/org/bluez"),
+                        timeout=3.0,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log.warning(
+                        "BlueZ health-check failed: %s — treating as restart", exc
+                    )
+                    restarted.set()
+
+        poll_task = asyncio.create_task(_health_poll())
+        try:
+            await restarted.wait()
+        finally:
+            poll_task.cancel()
+            await asyncio.gather(poll_task, return_exceptions=True)
+            if dbus_iface is not None:
+                try:
+                    dbus_iface.off_name_owner_changed(_on_name_owner_changed)
+                except Exception:
+                    pass
+
     async def stop_advertising(self) -> None:
         """Stop BLE advertising and set adapter non-discoverable."""
         if self._bus and self._adv_registered:

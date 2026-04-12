@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import os
+import sys
 import time
 
 from piauto.ble import BleManager, PhoneInfo
@@ -67,6 +68,7 @@ class Event(enum.Enum):
     RETRY_AVAILABLE = "RetryAvailable"
     RETRIES_EXHAUSTED = "RetriesExhausted"
     IGNITION_OFF = "IgnitionOff"
+    BLUEZ_RESTARTED = "BluezRestarted"
 
 
 # Timeouts per SM-001 §6
@@ -265,13 +267,14 @@ class StateMachine:
                     # Splash exited or no more output
                     await asyncio.sleep(0.5)
 
-        # Wait for phone, ignition off, or setup button
+        # Wait for phone, ignition off, setup button, or BlueZ crash
         phone_task = asyncio.create_task(self._ble.wait_for_phone())
         ignition_task = asyncio.create_task(self._ignition_off.wait())
         setup_task = asyncio.create_task(_watch_splash_stdout())
+        bluez_task = asyncio.create_task(self._ble.watch_bluez_restart())
 
         done, pending = await asyncio.wait(
-            [phone_task, ignition_task, setup_task],
+            [phone_task, ignition_task, setup_task, bluez_task],
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -283,6 +286,13 @@ class StateMachine:
         if reconnect_loop_task and not reconnect_loop_task.done():
             reconnect_loop_task.cancel()
             await asyncio.gather(reconnect_loop_task, return_exceptions=True)
+
+        if bluez_task in done:
+            log.critical(
+                "BlueZ crashed/restarted — all profile registrations lost; "
+                "exiting so systemd can restart piauto with a clean BT stack"
+            )
+            sys.exit(1)
 
         if ignition_task in done:
             self._transition(State.SHUTDOWN, Event.IGNITION_OFF)
@@ -525,10 +535,12 @@ class StateMachine:
         tcp_end_task = asyncio.create_task(
             self._openauto.wait_for_tcp_session_end()
         )
+        bluez_task = asyncio.create_task(self._ble.watch_bluez_restart())
 
         done, pending = await asyncio.wait(
             [exit_task, stopped_task, ignition_task, clock_task,
-             rfcomm_task, bt_disconnect_task, wifi_leave_task, tcp_end_task],
+             rfcomm_task, bt_disconnect_task, wifi_leave_task, tcp_end_task,
+             bluez_task],
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -538,6 +550,15 @@ class StateMachine:
         # Stop volume sync when leaving PROJECTION_ACTIVE
         if self._volume:
             await self._volume.stop()
+
+        if bluez_task in done:
+            log.critical(
+                "BlueZ crashed/restarted during projection — all profile "
+                "registrations lost; killing OpenAuto and exiting so systemd "
+                "can restart piauto with a clean BT stack"
+            )
+            await self._openauto.kill()
+            sys.exit(1)
 
         if ignition_task in done:
             self._transition(State.SHUTDOWN, Event.IGNITION_OFF)
