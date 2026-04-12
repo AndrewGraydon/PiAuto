@@ -33,6 +33,7 @@ _MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 _PAIR_WAIT_S = 1       # delay after pairing completes
 _PROFILE_CHECK_S = 1   # per-iteration wait when polling for A2DP endpoints
 _A2DP_SETTLE_S = 5     # wait for A2DP transport to stabilise after connect
+_WP_CONNECT_WAIT_S = 12  # time to wait for WirePlumber auto-connect after pairing
 
 
 def _is_audio_device(device_class: int) -> bool:
@@ -236,66 +237,40 @@ async def pair(mac: str) -> None:
 
         await asyncio.sleep(_PAIR_WAIT_S)
 
-        # Wait for A2DP endpoints to be registered by WirePlumber before
-        # attempting connect. Without endpoints, connect fails with
-        # profile-unavailable.
-        adapter_intro2 = await bus.introspect("org.bluez", "/org/bluez/hci0")
-        adapter2 = bus.get_proxy_object(
-            "org.bluez", "/org/bluez/hci0", adapter_intro2
-        )
-        media_iface = adapter2.get_interface("org.bluez.Media1")
-        adapter_props = adapter2.get_interface("org.freedesktop.DBus.Properties")
-        for wait in range(10):
+        # Do NOT call Connect() here. Calling Connect() while WirePlumber is
+        # also trying to register A2DP endpoints races against BlueZ's internal
+        # profile negotiation and can trigger a SEGV in bluetoothd 5.82 on
+        # certain devices (e.g. Logi Dock) that advertise multiple profiles.
+        #
+        # Instead, rely on WirePlumber's auto-connect (bluez5.auto-connect =
+        # [ a2dp_sink ] in wireplumber.conf.d/50-bluez-config.conf). After
+        # pairing and trusting, WirePlumber detects the new paired device and
+        # connects the A2DP sink profile on its own. We just wait for it.
+        log.info("Paired and trusted %s — waiting for WirePlumber auto-connect", mac)
+        for _ in range(_WP_CONNECT_WAIT_S):
+            await asyncio.sleep(1)
             try:
-                uuids = await adapter_props.call_get(
-                    "org.bluez.Media1", "SupportedUUIDs"
-                )
-                if uuids.value:
+                connected_v = await props.call_get("org.bluez.Device1", "Connected")
+                if connected_v.value:
                     break
             except Exception:
                 pass
-            await asyncio.sleep(_PROFILE_CHECK_S)
-
-        # Connect (retry on profile-unavailable — WirePlumber may still be
-        # registering A2DP endpoints after a service restart).
-        # Disconnect between retries to clear stale ACL connections.
-        last_err = None
-        for attempt in range(6):
-            try:
-                await dev_iface.call_connect()
-                last_err = None
-                break
-            except Exception as e:
-                last_err = e
-                if "profile-unavailable" in str(e) and attempt < 3:
-                    try:
-                        await dev_iface.call_disconnect()
-                    except Exception:
-                        pass
-                    await asyncio.sleep(3)
-                    continue
-                break
-
-        if last_err is not None:
-            try:
-                await dev_iface.call_disconnect()
-            except Exception:
-                pass
-            print(f"PAIR_FAIL|Connect failed: {last_err}", flush=True)
-            return
-
-        # Wait for A2DP profile to fully establish before releasing the
-        # D-Bus session. Without this, BlueZ may drop the connection when
-        # our client disconnects.
-        await asyncio.sleep(_A2DP_SETTLE_S)
 
         connected_v = await props.call_get("org.bluez.Device1", "Connected")
         if connected_v.value:
             print(f"PAIR_OK|{mac}|{name}", flush=True)
-            # Hold session open so BlueZ fully settles the A2DP transport
+            # Hold session briefly so BlueZ fully settles the A2DP transport
             await asyncio.sleep(_A2DP_SETTLE_S)
         else:
-            print(f"PAIR_FAIL|Connection not established", flush=True)
+            # WirePlumber didn't auto-connect within the window, but the device
+            # is paired and trusted — it will auto-connect on next boot or when
+            # it comes into range. Report success; the user doesn't need to re-pair.
+            log.info(
+                "%s paired and trusted but not yet connected — WirePlumber will"
+                " connect it automatically on next boot or range entry",
+                mac,
+            )
+            print(f"PAIR_OK|{mac}|{name}", flush=True)
 
     except Exception as e:
         print(f"PAIR_FAIL|{e}", flush=True)
