@@ -377,13 +377,15 @@ class BleManager:
         try:
             await self._register_agent()
         except Exception as exc:
-            log.warning("Failed to register pairing agent: %s", exc)
+            log.warning("Failed to register pairing agent: %s — BLE in mock mode", exc)
+            return False
 
         # Register RFCOMM profile for credential exchange
         try:
             await self._register_rfcomm_profile()
         except Exception as exc:
-            log.warning("Failed to register RFCOMM profile: %s", exc)
+            log.warning("Failed to register RFCOMM profile: %s — BLE in mock mode", exc)
+            return False
 
         log.info("BLE manager ready (ap_ip=%s, ap_iface=%s)", self._ap_ip, self._ap_interface)
         return True
