@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Test suite: 53 tests covering config validation, BLE setup failure modes, and all state machine transitions (SM-001). Runs on dev machines with no Pi hardware via mocks.
+
 ### Fixed
 - BLE `setup()` now returns `False` when agent or RFCOMM profile D-Bus registration fails, preventing silent timeouts during phone detection.
 
