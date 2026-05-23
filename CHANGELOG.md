@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `save_speaker_mac()` in `config.py` to persist the last paired speaker MAC to `/data/piauto.yaml`.
 - `BleManager._detect_adapter()` discovers the active BlueZ adapter at startup via ObjectManager — no more `hci0` hard-coding; works correctly when a USB dongle is also present.
 - Splash process now exits cleanly via a `QUIT` stdin command processed in the Qt event loop, eliminating the "Splash killed (did not stop in 3 s)" warning on every connection cycle.
+- `WifiConfig` now accepts `dhcp_start` / `dhcp_end` fields to override the hardcoded DHCP lease range for both standalone and AP+STA modes.
 
 ### Fixed
 - BLE `setup()` now returns `False` when agent or RFCOMM profile D-Bus registration fails, preventing silent timeouts during phone detection.
@@ -22,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Splash stdout is now pumped by a dedicated background task into an `asyncio.Queue`; the "SETUP" button press can no longer be silently dropped due to a missed `readline()` call.
 - `_kill_stale_autoapp()` now polls `ss` and waits up to 10 s for port 5000 to be fully released before returning, preventing EADDRINUSE failures on rapid reconnect.
 - Ignition callback `_on_ignition_off` is now guarded by a `_ignition_fired` flag so GPIO bounce or duplicate calls cannot trigger a double shutdown event.
+- In AP+STA mode, `hostapd` now uses the channel `wlan0` is currently on (detected via `iw dev wlan0 info`) instead of the config value — uap0 and wlan0 share one radio so they must be on the same channel.
+- Volume sync `_get_transports()` D-Bus calls are now wrapped in a 3 s `asyncio.wait_for`; a hung bus connection auto-reconnects instead of blocking the sync task indefinitely.
+- MAC addresses are now normalised to uppercase at all save/extract points (`PairingStore.save_pairing`, `save_speaker_mac`, `_extract_device_info`) so D-Bus device paths are always valid.
 
 ## [0.1.0] - 2026-05-16
 

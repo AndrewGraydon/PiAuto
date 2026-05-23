@@ -301,6 +301,7 @@ class PairingStore:
 
     def save_pairing(self, mac: str, name: str, timestamp: float) -> None:
         """Add or update a pairing record. Evicts oldest if at capacity."""
+        mac = mac.upper()
         records = self.load()
         for rec in records:
             if rec["mac"] == mac:
@@ -1164,7 +1165,7 @@ def _extract_device_info(device_path: str) -> tuple[str, str]:
     try:
         dev_part = device_path.rsplit("/", 1)[-1]
         if dev_part.startswith("dev_"):
-            mac = dev_part[4:].replace("_", ":")
+            mac = dev_part[4:].replace("_", ":").upper()
     except Exception:
         pass
     return mac, mac  # name defaults to MAC, overridden by _get_device_name

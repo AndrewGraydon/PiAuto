@@ -65,7 +65,9 @@ class VolumeSyncManager:
         try:
             while True:
                 try:
-                    transports = await self._get_transports(bus)
+                    transports = await asyncio.wait_for(
+                        self._get_transports(bus), timeout=3.0
+                    )
                     for path, vol in transports.items():
                         if vol >= 0 and self._last_volumes.get(path) != vol:
                             linear = vol / 127.0
@@ -76,6 +78,17 @@ class VolumeSyncManager:
                             self._last_volumes[path] = vol
                 except asyncio.CancelledError:
                     raise
+                except asyncio.TimeoutError:
+                    # D-Bus call hung — connection may be broken; reconnect next cycle
+                    log.debug("Volume sync: D-Bus call timed out, reconnecting")
+                    bus.disconnect()
+                    try:
+                        bus = await asyncio.wait_for(
+                            MessageBus(bus_type=BusType.SYSTEM).connect(), timeout=3.0
+                        )
+                    except Exception:
+                        await asyncio.sleep(_POLL_INTERVAL)
+                    continue
                 except DBusError:
                     # BlueZ may be temporarily unavailable during reconnects
                     pass
