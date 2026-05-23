@@ -134,15 +134,43 @@ class SplashManager:
         self._reader_task: asyncio.Task | None = None
 
     def _build_env(self) -> dict[str, str]:
-        """Build environment for splash/UI subprocesses."""
-        return {
-            **os.environ,
-            "QT_QPA_PLATFORM": "eglfs",
-            "QT_QPA_EGLFS_KMS_CONFIG": os.environ.get(
-                "QT_QPA_EGLFS_KMS_CONFIG", "/data/eglfs.json"
-            ),
-            "QT_QPA_EGLFS_HIDECURSOR": "1",
-        }
+        """Build a minimal environment for the splash subprocess.
+
+        Uses an explicit whitelist rather than inheriting all of os.environ so
+        that sensitive variables present in the root process (credentials, tokens,
+        piauto secrets) are not leaked into the Qt child process.
+        """
+        parent = os.environ
+        env: dict[str, str] = {}
+
+        # Essentials the child needs to run at all
+        for key in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL"):
+            if key in parent:
+                env[key] = parent[key]
+
+        # XDG runtime (needed by Qt/PipeWire)
+        for key in ("XDG_RUNTIME_DIR", "XDG_DATA_DIRS"):
+            if key in parent:
+                env[key] = parent[key]
+
+        # Library paths (non-standard Qt/GL installs)
+        for key in ("LD_LIBRARY_PATH", "LD_PRELOAD"):
+            if key in parent:
+                env[key] = parent[key]
+
+        # Development safety valves — preserve PIAUTO_* overrides
+        for key, val in parent.items():
+            if key.startswith("PIAUTO_"):
+                env[key] = val
+
+        # Qt EGLFS display configuration
+        env["QT_QPA_PLATFORM"] = "eglfs"
+        env["QT_QPA_EGLFS_KMS_CONFIG"] = parent.get(
+            "QT_QPA_EGLFS_KMS_CONFIG", "/data/eglfs.json"
+        )
+        env["QT_QPA_EGLFS_HIDECURSOR"] = "1"
+
+        return env
 
     async def _ensure_running(self) -> None:
         """Ensure the splash process is running and the stdout reader is active."""

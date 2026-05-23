@@ -294,7 +294,7 @@ class PairingStore:
             return []
         try:
             records = json.loads(path.read_text())
-            return sorted(records, key=lambda r: r.get("last_connected", 0), reverse=True)
+            return sorted(records, key=lambda r: (-r.get("last_connected", 0), r.get("mac", "")))
         except (json.JSONDecodeError, OSError) as exc:
             log.warning("Failed to load pairings: %s", exc)
             return []
@@ -310,7 +310,7 @@ class PairingStore:
                 break
         else:
             records.append({"mac": mac, "name": name, "last_connected": timestamp})
-        records.sort(key=lambda r: r["last_connected"], reverse=True)
+        records.sort(key=lambda r: (-r["last_connected"], r["mac"]))
         records = records[: self._max]
         self._dir.mkdir(parents=True, exist_ok=True)
         self._index_path().write_text(json.dumps(records, indent=2))

@@ -102,6 +102,16 @@ def _validate(cfg: PiAutoConfig) -> list[str]:
     if cfg.bluetooth.speaker_mac and not _MAC_RE.match(cfg.bluetooth.speaker_mac):
         errors.append(f"bluetooth.speaker_mac invalid: {cfg.bluetooth.speaker_mac}")
 
+    # Power
+    if not (1 <= cfg.power.ignition_debounce_ms <= 5000):
+        errors.append(
+            f"power.ignition_debounce_ms {cfg.power.ignition_debounce_ms} not in 1–5000"
+        )
+
+    # OpenAuto
+    if not cfg.openauto.binary:
+        errors.append("openauto.binary must not be empty")
+
     # Thermal
     if not (30 <= cfg.thermal.fan_low_temp <= 75):
         errors.append(f"thermal.fan_low_temp {cfg.thermal.fan_low_temp} not in 30–75")
@@ -160,6 +170,9 @@ def _dict_to_config(raw: dict) -> PiAutoConfig:
 def save_speaker_mac(mac: str, path: Path | None = None) -> None:
     """Persist bluetooth.speaker_mac to the config file (last paired wins)."""
     mac = mac.upper()
+    if not _MAC_RE.match(mac):
+        log.warning("save_speaker_mac: invalid MAC %r — not saving", mac)
+        return
     path = path or DEFAULT_CONFIG_PATH
     try:
         raw: dict = {}
