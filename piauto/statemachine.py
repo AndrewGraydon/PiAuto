@@ -29,7 +29,7 @@ import time
 
 from piauto.ble import BleManager, PhoneInfo
 from piauto.clock import restore_time, save_time
-from piauto.config import PiAutoConfig, load_config
+from piauto.config import PiAutoConfig, load_config, save_speaker_mac
 from piauto.gpio import GpioManager
 from piauto.log import get_logger, setup_logging
 from piauto.openauto import OpenAutoManager, ensure_tls_cert
@@ -244,6 +244,12 @@ class StateMachine:
         # Start BLE advertising
         await self._ble.start_advertising()
 
+        # Connect BT speaker in background — non-blocking, PipeWire picks up the sink
+        if self._config and self._config.bluetooth.speaker_mac:
+            asyncio.create_task(
+                self._ble.connect_speaker(self._config.bluetooth.speaker_mac)
+            )
+
         # Proactively page the last paired phone so Android Auto initiates
         # the RFCOMM session without the user having to open the app.
         # Retry every 30s in case the first attempt fired while the phone was
@@ -347,6 +353,9 @@ class StateMachine:
                 if len(parts) == 3:
                     mac, name = parts[1], parts[2]
                     log.info("BT speaker paired: %s (%s)", name, mac)
+                    save_speaker_mac(mac)
+                    if self._config:
+                        self._config.bluetooth.speaker_mac = mac
 
         # Return to IDLE
         self._transition(State.IDLE, Event.PHONE_DISCONNECTED)

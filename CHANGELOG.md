@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Test suite: 53 tests covering config validation, BLE setup failure modes, and all state machine transitions (SM-001). Runs on dev machines with no Pi hardware via mocks.
+- BT speaker auto-connect on every IDLE entry using `bluetooth.speaker_mac` from config (fire-and-forget, non-blocking).
+- `save_speaker_mac()` in `config.py` to persist the last paired speaker MAC to `/data/piauto.yaml`.
 
 ### Fixed
 - BLE `setup()` now returns `False` when agent or RFCOMM profile D-Bus registration fails, preventing silent timeouts during phone detection.
+- BT speaker pairing via the setup UI now saves `speaker_mac` to `/data/piauto.yaml` so the speaker auto-connects on subsequent boots (last paired wins).
 
 ## [0.1.0] - 2026-05-16
 

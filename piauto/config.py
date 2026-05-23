@@ -155,6 +155,22 @@ def _dict_to_config(raw: dict) -> PiAutoConfig:
     return cfg
 
 
+def save_speaker_mac(mac: str, path: Path | None = None) -> None:
+    """Persist bluetooth.speaker_mac to the config file (last paired wins)."""
+    path = path or DEFAULT_CONFIG_PATH
+    try:
+        raw: dict = {}
+        if path.exists():
+            parsed = yaml.safe_load(path.read_text())
+            if isinstance(parsed, dict):
+                raw = parsed
+        raw.setdefault("bluetooth", {})["speaker_mac"] = mac
+        path.write_text(yaml.dump(raw, default_flow_style=False, allow_unicode=True))
+        log.info("Saved speaker_mac %s → %s", mac, path)
+    except Exception as exc:
+        log.warning("Failed to save speaker_mac: %s", exc)
+
+
 def load_config(path: Path | None = None) -> PiAutoConfig:
     """Load and validate configuration. Returns defaults on any failure."""
     path = path or DEFAULT_CONFIG_PATH

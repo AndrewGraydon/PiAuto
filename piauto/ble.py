@@ -922,6 +922,29 @@ class BleManager:
         except Exception as exc:
             log.debug("Failed to trust %s: %s", mac, exc)
 
+    async def connect_speaker(self, mac: str) -> None:
+        """Establish A2DP connection to a paired BT speaker.
+
+        Non-fatal — called as a fire-and-forget task from IDLE. If the speaker
+        is out of range or already connected, the exception is silently ignored.
+        PipeWire picks up the new sink automatically once BlueZ connects.
+        """
+        if not self._bus:
+            return
+        dev_path = "/org/bluez/hci0/dev_" + mac.replace(":", "_")
+        try:
+            dev_intro = await self._bus.introspect("org.bluez", dev_path)
+            if not any(i.name == "org.bluez.Device1" for i in dev_intro.interfaces):
+                log.debug("Speaker %s not in BlueZ — skipping connect", mac)
+                return
+            dev = self._bus.get_proxy_object("org.bluez", dev_path, dev_intro)
+            dev_iface = dev.get_interface("org.bluez.Device1")
+            log.info("Connecting speaker %s", mac)
+            await asyncio.wait_for(dev_iface.call_connect(), timeout=15.0)
+            log.info("Speaker %s connected", mac)
+        except Exception as exc:
+            log.debug("Speaker connect %s: %s", mac, exc)
+
     def get_last_connected_mac(self) -> str | None:
         """Get the MAC of the most recently connected phone."""
         return self._pairing_store.get_last_connected()
