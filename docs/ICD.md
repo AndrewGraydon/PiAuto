@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-ICD-001               |
-| Version        | 3.2                          |
-| Date           | 2026-04-11                   |
+| Version        | 3.3                          |
+| Date           | 2026-05-23                   |
 | Status         | Active                       |
 
 ## 1. Introduction
@@ -227,6 +227,8 @@ The Pi 4B's BCM43455 WiFi chip supports concurrent AP and station mode on the sa
 
 Both interfaces share one radio and **must operate on the same channel**. The AP channel automatically follows the station's channel. Both connections are managed by NetworkManager and brought up by `piauto-wifi.service` before PiAuto starts.
 
+**Automatic channel detection:** When PiAuto starts the AP in AP+STA mode, `WifiManager.start_ap()` calls `_detect_sta_channel("wlan0")` (using `iw dev wlan0 info`) to read the channel the STA is currently using and configures the AP on the same channel. This ensures the AP configuration always matches the live radio state, even if the STA channel differs from the value in `piauto.yaml`.
+
 In standalone (production) mode without infrastructure WiFi, the Python `WifiManager` falls back to running hostapd on `wlan0` (192.168.1.1/24) with dnsmasq for DHCP.
 
 ### 4.4 DHCP Configuration
@@ -240,7 +242,7 @@ In AP+STA mode, DHCP for the `uap0` interface is provided by **NetworkManager** 
 | DHCP Range (AP+STA) | 192.168.50.100 – 192.168.50.199 (NM default for shared mode) |
 | Interface (standalone) | wlan0 (managed by dnsmasq)        |
 | Pi Static IP (standalone) | 192.168.1.1/24                  |
-| DHCP Range (standalone) | 192.168.1.100 – 192.168.1.199   |
+| DHCP Range (standalone) | 192.168.1.100 – 192.168.1.199 (default; overridable via `wifi.dhcp_start` / `wifi.dhcp_end` in `piauto.yaml`) |
 | Lease Time       | 1 hour                                   |
 | DNS              | Not provided (phone uses mobile data)    |
 

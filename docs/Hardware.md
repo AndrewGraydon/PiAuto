@@ -3,9 +3,9 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-HW-001                |
-| Version        | 3.1                          |
-| Date           | 2026-03-29                   |
-| Status         | Draft                        |
+| Version        | 3.2                          |
+| Date           | 2026-05-23                   |
+| Status         | Active                       |
 
 ## 1. Introduction
 

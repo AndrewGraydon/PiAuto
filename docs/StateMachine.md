@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-SM-001                |
-| Version        | 3.7                          |
-| Date           | 2026-04-11                   |
+| Version        | 3.8                          |
+| Date           | 2026-05-23                   |
 | Status         | Active                       |
 
 ## 1. Introduction
