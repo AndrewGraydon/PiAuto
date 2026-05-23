@@ -122,7 +122,7 @@ async def pair(mac: str) -> None:
     from dbus_next.service import ServiceInterface, method
 
     class PairingAgent(ServiceInterface):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__("org.bluez.Agent1")
 
         @method()

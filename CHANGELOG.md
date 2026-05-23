@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BleManager._detect_adapter()` discovers the active BlueZ adapter at startup via ObjectManager — no more `hci0` hard-coding; works correctly when a USB dongle is also present.
 - Splash process now exits cleanly via a `QUIT` stdin command processed in the Qt event loop, eliminating the "Splash killed (did not stop in 3 s)" warning on every connection cycle.
 - `WifiConfig` now accepts `dhcp_start` / `dhcp_end` fields to override the hardcoded DHCP lease range for both standalone and AP+STA modes.
+- `save_speaker_mac()` validates the MAC address before writing to config, preventing malformed values being persisted.
+- `power.ignition_debounce_ms` and `openauto.binary` are now validated at config load time.
+- Splash subprocess environment is now a whitelist (`PATH`, `HOME`, XDG vars, `PIAUTO_*` overrides, Qt EGLFS vars) rather than inheriting all of the root process environment.
 
 ### Fixed
 - BLE `setup()` now returns `False` when agent or RFCOMM profile D-Bus registration fails, preventing silent timeouts during phone detection.
@@ -26,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In AP+STA mode, `hostapd` now uses the channel `wlan0` is currently on (detected via `iw dev wlan0 info`) instead of the config value — uap0 and wlan0 share one radio so they must be on the same channel.
 - Volume sync `_get_transports()` D-Bus calls are now wrapped in a 3 s `asyncio.wait_for`; a hung bus connection auto-reconnects instead of blocking the sync task indefinitely.
 - MAC addresses are now normalised to uppercase at all save/extract points (`PairingStore.save_pairing`, `save_speaker_mac`, `_extract_device_info`) so D-Bus device paths are always valid.
+- `PairingStore` eviction sort now uses `(-last_connected, mac)` as the key, making eviction order deterministic when two records share the same timestamp.
+- `bt_pair.py` `PairingAgent.__init__` annotated with `-> None` (type hint consistency).
 
 ## [0.1.0] - 2026-05-16
 
