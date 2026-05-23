@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-05-23
+
+### Fixed
+- RFCOMM reconnect during `PROJECTION_ACTIVE` is now ignored when OpenAuto is still running — some phones (e.g. Samsung S24) periodically re-send the RFCOMM credential request as a renegotiation without ending the AA session. A 2 s grace period after the RFCOMM signal checks whether OpenAuto has also exited; if it is still running the reconnect is silently ignored and projection continues uninterrupted.
+
 ## [0.2.0] - 2026-05-23
 
 ### Added
@@ -72,5 +77,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Volume module rewritten to use `dbus_next` async API (removed blocking subprocess calls).
 - Consumer-grade reliability hardening: pending task cleanup in `PROJECTION_ACTIVE`, reconnect loop exception logging, OpenAuto dual-monitor guard, thermal sensor failure persistence, volume `wpctl` cleanup on `CancelledError`.
 
+[0.2.1]: https://github.com/AndrewGraydon/PiAuto/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/AndrewGraydon/PiAuto/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/AndrewGraydon/PiAuto/releases/tag/v0.1.0
