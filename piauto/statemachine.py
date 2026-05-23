@@ -515,6 +515,25 @@ class StateMachine:
             save_time()
             log.debug("Clock saved (periodic)")
 
+    async def _rfcomm_genuine_disconnect(self) -> None:
+        """Fire only when an RFCOMM reconnect coincides with OpenAuto exiting.
+
+        Some phones (e.g. Samsung S24) periodically re-send the RFCOMM
+        credential request while AA is still projecting — a renegotiation, not
+        a real disconnect. We wait 2 s after the RFCOMM signal: if OpenAuto is
+        still running the phone was just renegotiating and we ignore it; if
+        OpenAuto has also exited within that window it was a genuine disconnect.
+        """
+        while True:
+            await self._ble.wait_for_rfcomm_reconnect_attempt()
+            await asyncio.sleep(2)
+            if not self._openauto.is_running():
+                return
+            log.info(
+                "RFCOMM reconnect during projection — OpenAuto still active, "
+                "treating as phone renegotiation (ignoring)"
+            )
+
     async def _handle_projection_active(self) -> None:
         """PROJECTION_ACTIVE: Monitor OpenAuto process. SM-001 §3.6."""
         log.info("=== PROJECTION_ACTIVE ===")
@@ -526,6 +545,8 @@ class StateMachine:
         # Three independent disconnect signals — whichever fires first wins:
         #   1. RFCOMM reconnect attempt: phone disconnected AA in-app but stayed
         #      BT+WiFi connected; Android immediately retries via RFCOMM.
+        #      A 2 s grace period filters out phone-side renegotiations where
+        #      OpenAuto keeps running (see _rfcomm_genuine_disconnect).
         #   2. WiFi AP leave: phone fully disconnected from the AP (e.g. BT
         #      settings disconnect or range loss).
         #   3. BlueZ BT disconnect: phone's Connected property went False.
@@ -537,7 +558,7 @@ class StateMachine:
         ignition_task = asyncio.create_task(self._ignition_off.wait())
         clock_task = asyncio.create_task(self._periodic_clock_save())
         rfcomm_task = asyncio.create_task(
-            self._ble.wait_for_rfcomm_reconnect_attempt()
+            self._rfcomm_genuine_disconnect()
         )
         bt_disconnect_task = asyncio.create_task(
             self._ble.wait_for_phone_disconnect(self._current_phone.mac)
