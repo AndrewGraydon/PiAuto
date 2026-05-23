@@ -130,7 +130,8 @@ class SplashManager:
 
     def __init__(self) -> None:
         self._proc: asyncio.subprocess.Process | None = None
-        self._stdout_reading = False
+        self._line_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._reader_task: asyncio.Task | None = None
 
     def _build_env(self) -> dict[str, str]:
         """Build environment for splash/UI subprocesses."""
@@ -144,10 +145,8 @@ class SplashManager:
         }
 
     async def _ensure_running(self) -> None:
-        """Ensure the splash process is running with a clean stdout stream."""
+        """Ensure the splash process is running and the stdout reader is active."""
         if self.is_running:
-            # Reset the reader lock so a fresh caller can read stdout
-            self._stdout_reading = False
             return
 
         cmd = [sys.executable, "-m", "piauto.splash"]
@@ -163,6 +162,29 @@ class SplashManager:
             log.info("Splash process launched (pid %d)", self._proc.pid)
         except (FileNotFoundError, PermissionError) as exc:
             log.warning("Failed to launch splash: %s", exc)
+            return
+
+        self._reader_task = asyncio.create_task(self._pump_stdout())
+
+    async def _pump_stdout(self) -> None:
+        """Read lines from splash stdout and put them in the queue.
+
+        Runs as a background task for the lifetime of the splash process.
+        Uses a single continuous readline() loop so no line is ever dropped,
+        regardless of when state-machine callers check the queue.
+        """
+        if not self._proc or not self._proc.stdout:
+            return
+        try:
+            while True:
+                line_bytes = await self._proc.stdout.readline()
+                if not line_bytes:
+                    break
+                line = line_bytes.decode().strip()
+                if line:
+                    await self._line_queue.put(line)
+        except (asyncio.CancelledError, OSError):
+            pass
 
     async def _send_command(self, command: str) -> None:
         """Send a command to the splash process via stdin and flush."""
@@ -185,43 +207,56 @@ class SplashManager:
         log.info("Switched to BT setup view")
 
     async def read_stdout_line(self) -> str | None:
-        """Read a line from the splash subprocess stdout (non-blocking).
+        """Wait for the next line from the splash subprocess stdout.
 
-        Returns the line content, or None if not available / process exited.
+        Blocks until a line is available in the queue.  Returns None only if
+        the splash process has exited and the queue is empty.
         Used to receive signals like 'SETUP' or 'PAIRED|mac|name' from the UI.
-
-        Only one coroutine may read at a time; concurrent callers get None.
         """
-        if not self._proc or not self._proc.stdout:
+        if not self.is_running and self._line_queue.empty():
             return None
-        if self._stdout_reading:
-            return None
-        self._stdout_reading = True
         try:
-            line = await self._proc.stdout.readline()
-            if line:
-                return line.decode().strip()
-        except (asyncio.CancelledError, OSError):
+            return await self._line_queue.get()
+        except asyncio.CancelledError:
             raise
-        finally:
-            self._stdout_reading = False
-        return None
 
     async def kill(self) -> None:
-        """Send SIGTERM to the splash and wait for it to exit."""
+        """Stop the splash process and wait for it to exit.
+
+        Sends a QUIT stdin command first (processed by the Qt event loop) so
+        the app can exit cleanly and release DRM master without requiring the
+        kernel SIGTERM signal path.  Falls back to SIGTERM then SIGKILL.
+        """
+        if self._reader_task and not self._reader_task.done():
+            self._reader_task.cancel()
+            await asyncio.gather(self._reader_task, return_exceptions=True)
+        self._reader_task = None
+
         if not self._proc or self._proc.returncode is not None:
             self._proc = None
             return
 
         log.debug("Stopping splash (pid %d)", self._proc.pid)
-        self._proc.terminate()
 
+        # Ask Qt to quit gracefully via stdin — faster than the SIGTERM path
+        # because the stdin notifier fires in the Qt event loop without a
+        # signal-to-socket round trip.
+        await self._send_command("QUIT")
+
+        try:
+            await asyncio.wait_for(self._proc.wait(), timeout=2)
+            self._proc = None
+            return
+        except TimeoutError:
+            pass
+
+        self._proc.terminate()
         try:
             await asyncio.wait_for(self._proc.wait(), timeout=3)
         except TimeoutError:
             self._proc.kill()
             await self._proc.wait()
-            log.warning("Splash killed (did not stop in 3 s)")
+            log.warning("Splash killed (did not stop in 5 s)")
 
         self._proc = None
 
@@ -518,6 +553,8 @@ def _run_app() -> None:
                 _show_idle()
             elif line == "BT_SETUP":
                 _show_bt_setup()
+            elif line == "QUIT":
+                _on_sigterm()
 
     stdin_notifier.activated.connect(_on_stdin)
 

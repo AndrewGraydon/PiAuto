@@ -332,17 +332,26 @@ class WifiManager:
         phone has fully joined), then polls until no clients remain.  The
         confirmation step prevents a false-positive fire during PROJECTION_ACTIVE
         startup when the ARP entry may not yet be populated.
+
+        Phase 2 requires two consecutive negative polls before declaring the
+        phone gone — STALE ARP entries can persist for minutes after disconnect
+        and would otherwise trigger a false-positive reconnect cycle.
         """
         # Phase 1: wait until a client is confirmed present
         while not await self._check_arp_client():
             await asyncio.sleep(poll_interval)
 
-        # Phase 2: wait until no clients remain
+        # Phase 2: wait until no clients remain (2 consecutive misses required)
+        consecutive_misses = 0
         while True:
-            if not await self._check_arp_client():
-                log.info("Phone left AP (no reachable clients on %s)", self._interface)
-                return
             await asyncio.sleep(poll_interval)
+            if not await self._check_arp_client():
+                consecutive_misses += 1
+                if consecutive_misses >= 2:
+                    log.info("Phone left AP (no reachable clients on %s)", self._interface)
+                    return
+            else:
+                consecutive_misses = 0
 
     async def stop_ap(self) -> None:
         """Stop hostapd and dnsmasq, release interface."""

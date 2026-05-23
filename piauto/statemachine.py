@@ -97,6 +97,7 @@ class StateMachine:
         self._volume: VolumeSyncManager | None = None
         self._ignition_task: asyncio.Task | None = None
         self._ignition_off = asyncio.Event()
+        self._ignition_fired = False
         self._retry_count = 0
         self._current_phone: PhoneInfo | None = None
         self._running = False
@@ -275,8 +276,7 @@ class StateMachine:
                 if line == "SETUP":
                     return "SETUP"
                 if line is None:
-                    # Splash exited or no more output
-                    await asyncio.sleep(0.5)
+                    return None  # splash exited cleanly
 
         # Wait for phone, ignition off, setup button, or BlueZ crash
         phone_task = asyncio.create_task(self._ble.wait_for_phone())
@@ -340,11 +340,10 @@ class StateMachine:
         log.info("BT setup UI active — waiting for user to finish")
 
         # Read stdout lines from the UI until it exits or user presses Back
-        while self._splash.is_running:
+        while True:
             line = await self._splash.read_stdout_line()
             if line is None:
-                await asyncio.sleep(0.5)
-                continue
+                break  # splash exited
             if line == "BACK":
                 log.info("BT setup: user pressed Back")
                 break
@@ -725,5 +724,8 @@ class StateMachine:
 
     def _on_ignition_off(self) -> None:
         """Called by GPIO manager when ignition-off is detected."""
+        if self._ignition_fired:
+            return
+        self._ignition_fired = True
         log.info("Ignition OFF detected")
         self._ignition_off.set()

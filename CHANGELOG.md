@@ -11,10 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test suite: 53 tests covering config validation, BLE setup failure modes, and all state machine transitions (SM-001). Runs on dev machines with no Pi hardware via mocks.
 - BT speaker auto-connect on every IDLE entry using `bluetooth.speaker_mac` from config (fire-and-forget, non-blocking).
 - `save_speaker_mac()` in `config.py` to persist the last paired speaker MAC to `/data/piauto.yaml`.
+- `BleManager._detect_adapter()` discovers the active BlueZ adapter at startup via ObjectManager — no more `hci0` hard-coding; works correctly when a USB dongle is also present.
+- Splash process now exits cleanly via a `QUIT` stdin command processed in the Qt event loop, eliminating the "Splash killed (did not stop in 3 s)" warning on every connection cycle.
 
 ### Fixed
 - BLE `setup()` now returns `False` when agent or RFCOMM profile D-Bus registration fails, preventing silent timeouts during phone detection.
 - BT speaker pairing via the setup UI now saves `speaker_mac` to `/data/piauto.yaml` so the speaker auto-connects on subsequent boots (last paired wins).
+- `wait_for_client_leave_ap()` now requires two consecutive negative ARP polls before declaring the phone gone — prevents STALE ARP entries triggering a false-positive reconnect cycle.
+- HFP SLC daemon thread keeps its 5 s socket timeout active after the AT handshake instead of blocking indefinitely, so the thread exits promptly on disconnect.
+- Splash stdout is now pumped by a dedicated background task into an `asyncio.Queue`; the "SETUP" button press can no longer be silently dropped due to a missed `readline()` call.
+- `_kill_stale_autoapp()` now polls `ss` and waits up to 10 s for port 5000 to be fully released before returning, preventing EADDRINUSE failures on rapid reconnect.
+- Ignition callback `_on_ignition_off` is now guarded by a `_ignition_fired` flag so GPIO bounce or duplicate calls cannot trigger a double shutdown event.
 
 ## [0.1.0] - 2026-05-16
 
