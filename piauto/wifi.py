@@ -74,6 +74,32 @@ def _detect_ap_sta_mode() -> bool:
     return Path("/sys/class/net/uap0").exists()
 
 
+async def _detect_sta_channel(sta_iface: str = "wlan0") -> int | None:
+    """Return the channel wlan0 is currently using, or None if unknown.
+
+    In AP+STA mode uap0 and wlan0 share one radio — hostapd MUST use the
+    same channel as the STA connection or it will fail to start.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "iw", "dev", sta_iface, "info",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        for line in stdout.decode().splitlines():
+            line = line.strip()
+            if line.startswith("channel "):
+                # e.g. "channel 149 (5745 MHz), width: 80 MHz"
+                try:
+                    return int(line.split()[1])
+                except (IndexError, ValueError):
+                    pass
+    except (FileNotFoundError, TimeoutError, OSError):
+        pass
+    return None
+
+
 class WifiManager:
     """Manages the Wi-Fi AP lifecycle (hostapd + dnsmasq).
 
@@ -85,21 +111,22 @@ class WifiManager:
         self._hostapd_proc: asyncio.subprocess.Process | None = None
         self._dnsmasq_proc: asyncio.subprocess.Process | None = None
         self._nm_managed = False  # True if NetworkManager is managing the AP
+        self._effective_channel: int = config.channel  # may be overridden at start_ap time
 
         # Detect AP mode
         self._ap_sta = _detect_ap_sta_mode()
         if self._ap_sta:
             self._interface = _AP_STA_INTERFACE
             self._ip = _AP_STA_IP
-            self._dhcp_start = _AP_STA_DHCP_START
-            self._dhcp_end = _AP_STA_DHCP_END
+            self._dhcp_start = config.dhcp_start or _AP_STA_DHCP_START
+            self._dhcp_end = config.dhcp_end or _AP_STA_DHCP_END
             log.info("AP+STA mode detected (uap0 present) — AP on %s at %s",
                      self._interface, self._ip)
         else:
             self._interface = _STANDALONE_INTERFACE
             self._ip = _STANDALONE_IP
-            self._dhcp_start = _STANDALONE_DHCP_START
-            self._dhcp_end = _STANDALONE_DHCP_END
+            self._dhcp_start = config.dhcp_start or _STANDALONE_DHCP_START
+            self._dhcp_end = config.dhcp_end or _STANDALONE_DHCP_END
             log.info("Standalone AP mode — AP on %s at %s",
                      self._interface, self._ip)
 
@@ -119,7 +146,7 @@ class WifiManager:
         hostapd_conf = HOSTAPD_TEMPLATE.format(
             interface=self._interface,
             ssid=self._config.ssid,
-            channel=self._config.channel,
+            channel=self._effective_channel,
             password=self._config.password,
             country=self._config.country,
         )
@@ -195,6 +222,23 @@ class WifiManager:
             log.info("AP already managed by NetworkManager on %s — skipping hostapd/dnsmasq",
                      self._interface)
             return True
+
+        # In AP+STA mode uap0 and wlan0 share one radio — hostapd must use
+        # the channel wlan0 is currently on, not the config value.
+        if self._ap_sta:
+            sta_channel = await _detect_sta_channel("wlan0")
+            if sta_channel is not None:
+                if sta_channel != self._config.channel:
+                    log.info(
+                        "AP+STA: overriding config channel %d with wlan0 channel %d",
+                        self._config.channel, sta_channel,
+                    )
+                self._effective_channel = sta_channel
+            else:
+                log.warning(
+                    "AP+STA: cannot detect wlan0 channel — using config channel %d",
+                    self._config.channel,
+                )
 
         self._write_configs()
 

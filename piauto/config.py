@@ -28,6 +28,8 @@ class WifiConfig:
     password: str = ""  # must be set explicitly in /data/piauto.yaml
     channel: int = 149
     country: str = "AU"
+    dhcp_start: str = ""  # overrides WifiManager default if set
+    dhcp_end: str = ""    # overrides WifiManager default if set
 
 
 @dataclass
@@ -157,6 +159,7 @@ def _dict_to_config(raw: dict) -> PiAutoConfig:
 
 def save_speaker_mac(mac: str, path: Path | None = None) -> None:
     """Persist bluetooth.speaker_mac to the config file (last paired wins)."""
+    mac = mac.upper()
     path = path or DEFAULT_CONFIG_PATH
     try:
         raw: dict = {}
