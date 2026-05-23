@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-IG-001                |
-| Version        | 1.5                          |
-| Date           | 2026-04-11                   |
+| Version        | 1.6                          |
+| Date           | 2026-05-23                   |
 | Status         | Active                       |
 
 ## 1. Introduction
@@ -1014,3 +1014,129 @@ async def _reconnect_loop(mac: str) -> None:
 ```
 
 `CancelledError` is re-raised so the task cancels cleanly when IDLE exits.
+
+---
+
+## 24. v0.2.0 Reliability Hardening
+
+This section documents the 17 fixes applied in v0.2.0. They are grouped by phase. All 53 automated tests pass after each phase.
+
+### Phase 1 — Critical/High Reliability Fixes
+
+#### 24.1 BLE Adapter Path Hardcoding (`ble.py`)
+
+**Problem:** `BleManager` hardcoded `/org/bluez/hci0` throughout. When a USB BT dongle is present as `hci1`, the on-board adapter moves to `hci0` — or vice versa depending on probe order. Any adapter index mismatch causes all BLE/RFCOMM/HFP operations to fail silently.
+
+**Fix:** Added `BleManager._detect_adapter()` which queries BlueZ's `ObjectManager.GetManagedObjects()` at `setup()` time to find the first powered adapter. The discovered path is stored as `self._adapter_path` and used everywhere in place of the literal string. Defaults to `/org/bluez/hci0` if detection fails (logged as a warning).
+
+#### 24.2 ARP False-Positive on Client Leave (`wifi.py`)
+
+**Problem:** `wait_for_client_leave_ap()` checked the ARP table once and declared the client gone on any negative result. A single stale ARP entry or a brief kernel cache miss could return to splash prematurely.
+
+**Fix:** Added a `consecutive_misses` counter — the client is only considered gone after **2 consecutive** negative ARP checks (polling every 1 s). A single miss resets the counter.
+
+#### 24.3 HFP SLC Thread Hanging (`ble.py`)
+
+**Problem:** The HFP SLC socket was set to `sock.settimeout(None)` (blocking) after the handshake. The background thread then called `sock.recv(512)` in an infinite loop. If the remote closed the connection without sending data, the call would block indefinitely, leaking the thread.
+
+**Fix:** Retained the 5-second socket timeout from the handshake phase. The keepalive loop handles `socket.timeout` as a normal idle condition (`continue`) rather than an error. A clean EOF or a non-timeout exception breaks the loop and closes the socket.
+
+#### 24.4 Splash Stdout Race (`splash.py`, `statemachine.py`)
+
+**Problem:** `SplashManager.read_stdout_line()` used a boolean flag `_stdout_reading` and polled with `asyncio.sleep(0.1)`. Any line produced while the flag was `True` (another caller active) was permanently lost. A "BT_SETUP" line dropped this way would leave the state machine deaf to the Setup button press.
+
+**Fix:** Replaced the flag/poll pattern with a dedicated `_pump_stdout()` background task that runs a continuous `readline()` loop and feeds each line into `asyncio.Queue`. `read_stdout_line()` does `await self._line_queue.get()`, which blocks until a line is available. No line can be dropped.
+
+#### 24.5 OpenAuto Port TIME_WAIT (`openauto.py`)
+
+**Problem:** After `pkill autoapp`, the TCP port 5000 sometimes stayed in TIME_WAIT for up to 60 seconds. If OpenAuto was immediately relaunched (e.g. on quick phone reconnect), it would fail to bind the port and exit with an error.
+
+**Fix:** `_kill_stale_autoapp()` now polls `ss -tlnH` after pkill, waiting up to 10 seconds for `:5000` to disappear from the socket table. It logs a warning if the port is still occupied after 10 seconds, giving the operator visibility without blocking indefinitely.
+
+#### 24.6 Splash DRM Handoff Race (`splash.py`)
+
+**Problem:** The state machine called `self._splash.kill()` and then immediately launched OpenAuto. If the splash Qt process hadn't fully released DRM master yet, OpenAuto would fail to acquire it and exit with a framebuffer error. The symptom was `WARNING: Splash process did not stop in X s`.
+
+**Fix:** `SplashManager.kill()` now sends a `"QUIT\n"` command via the splash process's stdin before sending SIGTERM. The Qt application handles `"QUIT"` in its stdin handler by calling the SIGTERM handler directly — this is a faster path than the kernel signal delivery and ensures the Qt event loop exits cleanly and DRM master is released before `kill()` returns. SIGTERM (3 s timeout) and SIGKILL are retained as fallbacks.
+
+#### 24.7 Ignition Callback Not Idempotent (`statemachine.py`)
+
+**Problem:** The ignition-off GPIO callback `_on_ignition_off()` could fire multiple times (GPIO bounce, multiple edge detections) and trigger multiple shutdown sequences. Duplicate `shutdown -h now` calls are harmless but duplicate state transitions (e.g. double-entering SHUTDOWN) could cause log noise or unexpected behavior.
+
+**Fix:** Added a `self._ignition_fired: bool = False` guard. `_on_ignition_off()` returns immediately if `_ignition_fired` is already `True`; sets it to `True` before proceeding.
+
+---
+
+### Phase 2 — Audio/WiFi Reliability Fixes
+
+#### 24.8 WiFi Channel Enforcement in AP+STA Mode (`wifi.py`)
+
+**Problem:** In AP+STA mode, `WifiManager.start_ap()` wrote the channel from `piauto.yaml` into the hostapd config. If the STA connected on a different channel (e.g. the router switched from 149 to 36), the AP config would be wrong, causing the AP to fail to start or phones to be unable to connect.
+
+**Fix:** Added `_detect_sta_channel(sta_iface)` which runs `iw dev wlan0 info` and parses the `channel` line. `start_ap()` calls this in AP+STA mode and overrides `self._effective_channel` with the actual STA channel before writing configs.
+
+#### 24.9 Volume Sync D-Bus Hang (`volume.py`)
+
+**Problem:** `VolumeMonitor._get_transports(bus)` could hang indefinitely if BlueZ was unresponsive or the transport object path was stale. This blocked the `volume_sync` task, preventing it from ever polling volume again.
+
+**Fix:** Wrapped the `_get_transports()` call in `asyncio.wait_for(..., timeout=3.0)`. On `asyncio.TimeoutError`, the D-Bus bus connection is disconnected and a fresh one is reconnected (also with a 3 s timeout) before the polling loop continues.
+
+#### 24.10 MAC Address Case Inconsistency (`ble.py`, `config.py`)
+
+**Problem:** BlueZ D-Bus returns MAC addresses in uppercase (`AA:BB:CC:DD:EE:FF`), but some paths (user input, RFCOMM extraction) could produce lowercase MACs. Comparisons between differently-cased MACs failed, causing valid paired devices to be unrecognised.
+
+**Fix:** All MAC addresses are uppercased at every entry point: `PairingStore.save_pairing()`, `_extract_device_info()`, and `config.save_speaker_mac()`. The pairing store's `load()` and `save_pairing()` methods also sort records by `(-last_connected, mac)` for deterministic ordering.
+
+#### 24.11 Configurable DHCP Range (`config.py`, `wifi.py`)
+
+**Problem:** The standalone-mode DHCP range (192.168.1.100–199) was hardcoded, making it impossible to deploy PiAuto on a network segment where that range conflicts with existing DHCP leases.
+
+**Fix:** Added optional `dhcp_start` and `dhcp_end` fields to `WifiConfig`. `WifiManager` uses these if set, falling back to the built-in defaults. The fields are ignored in AP+STA mode (NetworkManager handles DHCP).
+
+---
+
+### Phase 3 — Pre-Release Polish
+
+#### 24.12 Config Validation for Critical Fields (`config.py`)
+
+**Problem:** A config file with `openauto.binary: ""` (empty string) or an out-of-range `power.ignition_debounce_ms` (e.g. 0 or 100000) would pass validation and cause a confusing runtime failure rather than a clear startup error.
+
+**Fix:** Added validation rules in `_validate()`:
+- `power.ignition_debounce_ms` must be in range 1–5000 ms.
+- `openauto.binary` must not be empty.
+
+Violations are collected and logged as warnings at startup (consistent with the existing validation approach — PiAuto boots with defaults rather than refusing to start).
+
+#### 24.13 MAC Validation in `save_speaker_mac` (`config.py`)
+
+**Problem:** `save_speaker_mac()` accepted any string as a MAC address. A malformed value (e.g. empty string, partial address, or non-hex characters) would be written to the config file and then cause failures when BlueZ tried to look up the device.
+
+**Fix:** Added a regex check against `_MAC_RE = re.compile(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$')` (after uppercasing). Invalid MACs are rejected with a `log.warning` and the config is not written.
+
+#### 24.14 Pairing Store Deterministic Ordering (`ble.py`)
+
+**Problem:** `PairingStore.load()` returned records in file-storage order. Across writes and reloads, the order was non-deterministic, making the "most recently connected device" ordering unreliable for the auto-reconnect selection logic.
+
+**Fix:** `load()` sorts records by `(-last_connected, mac)` — most-recent first, with MAC as a tiebreaker for determinism. `save_pairing()` applies the same sort before writing, so the file is always in a predictable order.
+
+#### 24.15 Splash Subprocess Environment Restriction (`splash.py`)
+
+**Problem:** `SplashManager._build_env()` passed the full `os.environ` to the splash subprocess. This exposed sensitive environment variables (e.g. `PIAUTO_CONFIG_PATH` pointing to a secrets file, shell history paths) to the Qt process, which runs with a broader attack surface (IPC sockets, Qt plugins).
+
+**Fix:** Replaced `**os.environ` with an explicit whitelist. The splash subprocess receives only: `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `XDG_*`, `LD_*`, `PIAUTO_*`, and Qt EGLFS display variables. All other environment variables are excluded.
+
+#### 24.16 Type Hint Completeness (`bt_pair.py`)
+
+**Problem:** `PairingAgent.__init__` was missing a `-> None` return type annotation, inconsistent with the rest of the codebase's type-hint coverage.
+
+**Fix:** Added `-> None` to `PairingAgent.__init__`.
+
+#### 24.17 Test Suite Expansion (53 tests)
+
+Added `tests/test_53.py` covering:
+- Config validation (`_validate()`) — ignition_debounce_ms bounds, empty binary, MAC regex
+- `BleManager.setup()` — adapter detection fallback, ObjectManager failure handling
+- State machine transitions — BOOTING→IDLE, IDLE→BT_PAIRING, PROJECTION_ACTIVE→IDLE disconnect paths
+- `PairingStore` ordering — deterministic sort after mixed-timestamp records
+
+All 53 tests pass on a development machine without Pi hardware (hardware-dependent modules mock gracefully).

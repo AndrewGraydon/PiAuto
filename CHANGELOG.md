@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-05-23
 
 ### Added
 - Test suite: 53 tests covering config validation, BLE setup failure modes, and all state machine transitions (SM-001). Runs on dev machines with no Pi hardware via mocks.
@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MAC addresses are now normalised to uppercase at all save/extract points (`PairingStore.save_pairing`, `save_speaker_mac`, `_extract_device_info`) so D-Bus device paths are always valid.
 - `PairingStore` eviction sort now uses `(-last_connected, mac)` as the key, making eviction order deterministic when two records share the same timestamp.
 - `bt_pair.py` `PairingAgent.__init__` annotated with `-> None` (type hint consistency).
+
+### Documentation
+- All specification documents updated to v0.2.0 (Architecture 3.4, ICD 3.3, SRS 3.4, State Machine 3.8, Hardware 3.2, Test Plan 4.6, Implementation 1.6, PiSetup 1.5, RTM 3.4).
+- Hardware.md status changed from Draft to Active.
+- README: removed duplicate power-loss bullet, updated interface count to 12, updated project status to v0.2.0, added optional `dhcp_start`/`dhcp_end` config fields.
+- Architecture §4.2: documented `BleManager._detect_adapter()` adapter auto-detection.
+- ICD §4.3: documented automatic STA channel detection in AP+STA mode.
+- ICD §4.4: documented configurable `dhcp_start`/`dhcp_end` fields for standalone DHCP range.
+- PiSetup §11.3: documented runtime channel sync behaviour.
+- Implementation §24: new section documenting all 17 v0.2.0 fixes.
 
 ## [0.1.0] - 2026-05-16
 
@@ -62,5 +72,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Volume module rewritten to use `dbus_next` async API (removed blocking subprocess calls).
 - Consumer-grade reliability hardening: pending task cleanup in `PROJECTION_ACTIVE`, reconnect loop exception logging, OpenAuto dual-monitor guard, thermal sensor failure persistence, volume `wpctl` cleanup on `CancelledError`.
 
-[Unreleased]: https://github.com/andrew-graydon/piauto/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/andrew-graydon/piauto/releases/tag/v0.1.0
+[0.2.0]: https://github.com/AndrewGraydon/PiAuto/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/AndrewGraydon/PiAuto/releases/tag/v0.1.0

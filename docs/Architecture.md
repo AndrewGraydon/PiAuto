@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-ARCH-001              |
-| Version        | 3.3                          |
-| Date           | 2026-04-11                   |
+| Version        | 3.4                          |
+| Date           | 2026-05-23                   |
 | Status         | Active                       |
 
 ## 1. Introduction
@@ -134,7 +134,7 @@ graph TD
 
 | Component       | Technology          | Satisfies              | Description |
 | :-------------- | :------------------ | :--------------------- | :---------- |
-| BlueZ           | BlueZ 5.x (D-Bus)  | FR-001 to FR-005, FR-025, FR-026 | Handles BLE WAA advertisement (discovery), RFCOMM Profile1 (WAA credential exchange), HFP HF Profile1 (OEM-style auto-reconnect — triggers Android car mode on boot), Classic BT A2DP audio sink (managed by WirePlumber), and paired device storage. Note: `Device1.Connect()` is intentionally not called for audio devices — WirePlumber owns audio connections to avoid a BlueZ 5.82 SEGV on multi-profile devices (see IG §21). |
+| BlueZ           | BlueZ 5.x (D-Bus)  | FR-001 to FR-005, FR-025, FR-026 | Handles BLE WAA advertisement (discovery), RFCOMM Profile1 (WAA credential exchange), HFP HF Profile1 (OEM-style auto-reconnect — triggers Android car mode on boot), Classic BT A2DP audio sink (managed by WirePlumber), and paired device storage. Note: `Device1.Connect()` is intentionally not called for audio devices — WirePlumber owns audio connections to avoid a BlueZ 5.82 SEGV on multi-profile devices (see IG §21). The active adapter is discovered dynamically at startup via `BleManager._detect_adapter()`, which queries BlueZ's `ObjectManager` for the first powered adapter — allowing operation regardless of whether the adapter appears as `hci0` or `hci1` (e.g. when a USB BT dongle is present). |
 | NetworkManager  | NetworkManager      | FR-006 to FR-010       | Manages the WiFi AP+STA configuration. The `uap0` virtual AP interface (SSID: PiAuto, 192.168.50.1/24) is created by a udev rule and managed by NM profile `piauto-ap`. `wlan0` STA remains connected to infrastructure WiFi. Both connections are brought up at boot by `piauto-wifi.service`. |
 | hostapd         | hostapd 2.10+       | FR-006 to FR-009       | Used in standalone (non-NM) mode only. When `uap0` is present and NM-managed, the Python `WifiManager` detects this via `_check_nm_managed_ap()` and skips hostapd/dnsmasq entirely. |
 | dnsmasq         | dnsmasq             | FR-010                 | Used in standalone (non-NM) mode only. In AP+STA mode, NetworkManager's built-in DHCP handles the `uap0` interface. |

@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-RTM-001               |
-| Version        | 3.3                          |
-| Date           | 2026-04-11                   |
+| Version        | 3.4                          |
+| Date           | 2026-05-23                   |
 | Status         | Active                       |
 
 ## 1. Introduction

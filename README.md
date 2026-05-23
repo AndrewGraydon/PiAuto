@@ -39,7 +39,6 @@ Pi ──BT A2DP──► Vehicle Speaker (audio output)
 - **Bluetooth audio output** — A2DP to vehicle speaker with 4 concurrent AA streams
 - **Ignition-sense power management** — clean boot/shutdown with vehicle ignition
 - **Thermal management** — PWM fan control with temperature-based profile
-- **Power-loss resilient ext4** — journaling filesystem + BlueZ bind mount to `/data/` provides resilience without overlayfs
 - **Power-loss resilience** — clock saved every 5 min during projection (≤5 min stale on power cut); BlueZ pairing DB persisted to `/data/bluetooth/` via bind mount so phone/speaker survive unexpected power loss without re-pairing
 - **Graceful degradation** — develops and runs on non-Pi machines in mock mode
 
@@ -166,6 +165,8 @@ wifi:
   password: "your-password-here"  # min 8 characters
   channel: 149                     # 149 or 165 (5 GHz, no DFS)
   country: "AU"                    # ISO 3166-1 alpha-2
+  # dhcp_start: "192.168.50.100"  # optional: override DHCP range start (standalone mode)
+  # dhcp_end:   "192.168.50.199"  # optional: override DHCP range end (standalone mode)
 
 bluetooth:
   device_name: "PiAuto"
@@ -183,6 +184,8 @@ power:
 
 If the config file is missing or invalid, PiAuto logs a warning and boots with built-in defaults.
 
+In AP+STA mode (NM-managed), DHCP is handled by NetworkManager and the `dhcp_start`/`dhcp_end` fields are ignored. They only apply in standalone mode (hostapd+dnsmasq).
+
 ## Documentation
 
 The project follows specification-driven development. All documents are in [`docs/`](docs/):
@@ -191,12 +194,12 @@ The project follows specification-driven development. All documents are in [`doc
 | :------- | :---------- |
 | [SRS](docs/SRS.md) | Software Requirements Specification (47 FR + 5 PR + 7 NR) |
 | [Architecture](docs/Architecture.md) | System architecture and technology decisions |
-| [ICD](docs/ICD.md) | Interface Control Document (11 interfaces) |
+| [ICD](docs/ICD.md) | Interface Control Document (12 interfaces) |
 | [State Machine](docs/StateMachine.md) | State definitions, events, and transitions |
 | [Hardware](docs/Hardware.md) | Hardware specification, GPIO pinout, BOM |
 | [Implementation](docs/Implementation.md) | Code structure, config schema, templates |
 | [Pi Setup](docs/PiSetup.md) | Raspberry Pi setup and deployment guide |
-| [Test Plan](docs/TestPlan.md) | 53 test cases with pass/fail criteria |
+| [Test Plan](docs/TestPlan.md) | Test plan and 53 automated test cases (pytest) |
 | [RTM](docs/RTM.md) | Requirements Traceability Matrix (97% coverage) |
 
 ## Requirements
@@ -210,7 +213,7 @@ The project follows specification-driven development. All documents are in [`doc
 
 ## Project Status
 
-This is a prototype/hobbyist project. The full specification suite is complete and the system is operational end-to-end.
+**v0.2.0** — The full specification suite is complete and the system is operational end-to-end. The 53-test automated suite covers config validation, BLE setup, and state machine transitions. See [CHANGELOG](CHANGELOG.md) for the full history.
 
 **Working:**
 - Full wireless Android Auto projection (BLE discovery → WiFi → TCP/TLS → video + audio)

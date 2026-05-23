@@ -3,8 +3,8 @@
 | Field          | Value                        |
 | :------------- | :--------------------------- |
 | Document ID    | PiAuto-PSG-001               |
-| Version        | 1.4                          |
-| Date           | 2026-04-11                   |
+| Version        | 1.5                          |
+| Date           | 2026-05-23                   |
 | Status         | Active                       |
 
 ## 1. Prerequisites
@@ -667,6 +667,8 @@ nmcli connection add type wifi ifname uap0 con-name piauto-ap \
 > ```bash
 > nmcli connection modify piauto-ap wifi.channel 48
 > ```
+>
+> **Runtime channel sync:** PiAuto's `WifiManager` automatically detects the channel `wlan0` is currently using (via `iw dev wlan0 info`) when it starts the AP, and overrides the configured channel to match. This ensures the AP config is always correct even if the STA roams to a different channel — no manual intervention required.
 
 > **Password note:** Change `piauto1234` to a stronger passphrase before deployment. The NM profile password and `/data/piauto.yaml` `wifi.password` must match — the RFCOMM credential exchange sends the value from the YAML config to the phone. Update both with:
 > ```bash
