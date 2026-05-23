@@ -29,7 +29,7 @@ import time
 
 from piauto.ble import BleManager, PhoneInfo
 from piauto.clock import restore_time, save_time
-from piauto.config import PiAutoConfig, load_config
+from piauto.config import PiAutoConfig, load_config, save_speaker_mac
 from piauto.gpio import GpioManager
 from piauto.log import get_logger, setup_logging
 from piauto.openauto import OpenAutoManager, ensure_tls_cert
@@ -97,6 +97,7 @@ class StateMachine:
         self._volume: VolumeSyncManager | None = None
         self._ignition_task: asyncio.Task | None = None
         self._ignition_off = asyncio.Event()
+        self._ignition_fired = False
         self._retry_count = 0
         self._current_phone: PhoneInfo | None = None
         self._running = False
@@ -244,6 +245,12 @@ class StateMachine:
         # Start BLE advertising
         await self._ble.start_advertising()
 
+        # Connect BT speaker in background — non-blocking, PipeWire picks up the sink
+        if self._config and self._config.bluetooth.speaker_mac:
+            asyncio.create_task(
+                self._ble.connect_speaker(self._config.bluetooth.speaker_mac)
+            )
+
         # Proactively page the last paired phone so Android Auto initiates
         # the RFCOMM session without the user having to open the app.
         # Retry every 30s in case the first attempt fired while the phone was
@@ -269,8 +276,7 @@ class StateMachine:
                 if line == "SETUP":
                     return "SETUP"
                 if line is None:
-                    # Splash exited or no more output
-                    await asyncio.sleep(0.5)
+                    return None  # splash exited cleanly
 
         # Wait for phone, ignition off, setup button, or BlueZ crash
         phone_task = asyncio.create_task(self._ble.wait_for_phone())
@@ -334,11 +340,10 @@ class StateMachine:
         log.info("BT setup UI active — waiting for user to finish")
 
         # Read stdout lines from the UI until it exits or user presses Back
-        while self._splash.is_running:
+        while True:
             line = await self._splash.read_stdout_line()
             if line is None:
-                await asyncio.sleep(0.5)
-                continue
+                break  # splash exited
             if line == "BACK":
                 log.info("BT setup: user pressed Back")
                 break
@@ -347,6 +352,9 @@ class StateMachine:
                 if len(parts) == 3:
                     mac, name = parts[1], parts[2]
                     log.info("BT speaker paired: %s (%s)", name, mac)
+                    save_speaker_mac(mac)
+                    if self._config:
+                        self._config.bluetooth.speaker_mac = mac
 
         # Return to IDLE
         self._transition(State.IDLE, Event.PHONE_DISCONNECTED)
@@ -716,5 +724,8 @@ class StateMachine:
 
     def _on_ignition_off(self) -> None:
         """Called by GPIO manager when ignition-off is detected."""
+        if self._ignition_fired:
+            return
+        self._ignition_fired = True
         log.info("Ignition OFF detected")
         self._ignition_off.set()

@@ -117,10 +117,15 @@ def _run_hfp_slc(fd: int) -> None:
         exchange(b"AT+CIND?")         # query indicator values
         exchange(b"AT+CMER=3,0,0,1")  # enable indicator reporting → SLC established
 
-        # SLC complete — keep open, draining unsolicited events until disconnect
-        sock.settimeout(None)
-        while sock.recv(512):
-            pass
+        # SLC complete — drain unsolicited events; keep timeout so the thread
+        # exits promptly on disconnect rather than blocking indefinitely.
+        while True:
+            try:
+                chunk = sock.recv(512)
+                if not chunk:
+                    break
+            except socket.timeout:
+                pass  # no data within 5 s — normal idle; keep looping
     except Exception:
         pass
     finally:
@@ -342,6 +347,7 @@ class BleManager:
         self._ap_ip = ap_ip
         self._ap_interface = ap_interface
         self._bus = None
+        self._adapter_path = "/org/bluez/hci0"  # updated by _detect_adapter() in setup()
         self._advertising = False
         self._pairing_store = PairingStore(max_records=bt_config.max_paired)
         self._rfcomm_fd: int | None = None
@@ -373,6 +379,8 @@ class BleManager:
             log.warning("BlueZ not available: %s", exc)
             return False
 
+        await self._detect_adapter()
+
         # Register pairing agent
         try:
             await self._register_agent()
@@ -391,6 +399,37 @@ class BleManager:
         return True
 
     # ── D-Bus registrations ──────────────────────────────────────
+
+    async def _detect_adapter(self) -> None:
+        """Detect the first powered BlueZ adapter and store its D-Bus path.
+
+        Enumerates via ObjectManager so the correct adapter is used regardless
+        of whether the built-in chip surfaces as hci0 or hci1 (e.g. when a USB
+        dongle is also present).
+        """
+        try:
+            obj_mgr_intro = await self._bus.introspect(BLUEZ_SERVICE, "/")
+            obj_mgr = self._bus.get_proxy_object(BLUEZ_SERVICE, "/", obj_mgr_intro)
+            mgr_iface = obj_mgr.get_interface("org.freedesktop.DBus.ObjectManager")
+            objects = await mgr_iface.call_get_managed_objects()
+            powered_path: str | None = None
+            fallback_path: str | None = None
+            for path, interfaces in objects.items():
+                if ADAPTER_IFACE in interfaces:
+                    if fallback_path is None:
+                        fallback_path = path
+                    powered_var = interfaces[ADAPTER_IFACE].get("Powered")
+                    if powered_var is not None:
+                        val = powered_var.value if hasattr(powered_var, "value") else powered_var
+                        if val and powered_path is None:
+                            powered_path = path
+            chosen = powered_path or fallback_path
+            if chosen:
+                self._adapter_path = chosen
+                log.info("Using BT adapter: %s%s", chosen,
+                         "" if powered_path else " (unpowered — will be powered in start_advertising)")
+        except Exception as exc:
+            log.warning("Adapter detection failed: %s — defaulting to %s", exc, self._adapter_path)
 
     async def _register_agent(self) -> None:
         """Register a NoInputNoOutput agent with BlueZ for auto-accept pairing."""
@@ -598,8 +637,8 @@ class BleManager:
             self._bus.export(ADV_PATH, self._advertisement)
 
         adapter_proxy = self._bus.get_proxy_object(
-            BLUEZ_SERVICE, "/org/bluez/hci0",
-            await self._bus.introspect(BLUEZ_SERVICE, "/org/bluez/hci0"),
+            BLUEZ_SERVICE, self._adapter_path,
+            await self._bus.introspect(BLUEZ_SERVICE, self._adapter_path),
         )
         adv_mgr = adapter_proxy.get_interface(LE_ADV_MANAGER_IFACE)
         await adv_mgr.call_register_advertisement(ADV_PATH, {})
@@ -622,8 +661,8 @@ class BleManager:
         try:
             # Power on adapter and set discoverable
             adapter_proxy = self._bus.get_proxy_object(
-                BLUEZ_SERVICE, "/org/bluez/hci0",
-                await self._bus.introspect(BLUEZ_SERVICE, "/org/bluez/hci0"),
+                BLUEZ_SERVICE, self._adapter_path,
+                await self._bus.introspect(BLUEZ_SERVICE, self._adapter_path),
             )
             props = adapter_proxy.get_interface(PROPERTIES_IFACE)
             await props.call_set(ADAPTER_IFACE, "Powered", _variant(True))
@@ -724,8 +763,8 @@ class BleManager:
         if self._bus and self._adv_registered:
             try:
                 adapter_proxy = self._bus.get_proxy_object(
-                    BLUEZ_SERVICE, "/org/bluez/hci0",
-                    await self._bus.introspect(BLUEZ_SERVICE, "/org/bluez/hci0"),
+                    BLUEZ_SERVICE, self._adapter_path,
+                    await self._bus.introspect(BLUEZ_SERVICE, self._adapter_path),
                 )
                 adv_mgr = adapter_proxy.get_interface(LE_ADV_MANAGER_IFACE)
                 await adv_mgr.call_unregister_advertisement(ADV_PATH)
@@ -741,8 +780,8 @@ class BleManager:
         if self._bus:
             try:
                 adapter_proxy = self._bus.get_proxy_object(
-                    BLUEZ_SERVICE, "/org/bluez/hci0",
-                    await self._bus.introspect(BLUEZ_SERVICE, "/org/bluez/hci0"),
+                    BLUEZ_SERVICE, self._adapter_path,
+                    await self._bus.introspect(BLUEZ_SERVICE, self._adapter_path),
                 )
                 props = adapter_proxy.get_interface(PROPERTIES_IFACE)
                 await props.call_set(ADAPTER_IFACE, "Discoverable", _variant(False))
@@ -817,7 +856,7 @@ class BleManager:
             await asyncio.get_running_loop().create_future()
             return
 
-        dev_path = "/org/bluez/hci0/dev_" + mac.replace(":", "_")
+        dev_path = self._adapter_path + "/dev_" + mac.replace(":", "_")
         disconnected = asyncio.Event()
 
         def _on_props_changed(iface: str, changed: dict, invalidated: list) -> None:
@@ -911,7 +950,7 @@ class BleManager:
         """
         if not self._bus:
             return
-        dev_path = "/org/bluez/hci0/dev_" + mac.replace(":", "_")
+        dev_path = self._adapter_path + "/dev_" + mac.replace(":", "_")
         try:
             from dbus_next import Variant
             dev_intro = await self._bus.introspect("org.bluez", dev_path)
@@ -921,6 +960,29 @@ class BleManager:
             log.info("Device %s marked Trusted in BlueZ", mac)
         except Exception as exc:
             log.debug("Failed to trust %s: %s", mac, exc)
+
+    async def connect_speaker(self, mac: str) -> None:
+        """Establish A2DP connection to a paired BT speaker.
+
+        Non-fatal — called as a fire-and-forget task from IDLE. If the speaker
+        is out of range or already connected, the exception is silently ignored.
+        PipeWire picks up the new sink automatically once BlueZ connects.
+        """
+        if not self._bus:
+            return
+        dev_path = self._adapter_path + "/dev_" + mac.replace(":", "_")
+        try:
+            dev_intro = await self._bus.introspect("org.bluez", dev_path)
+            if not any(i.name == "org.bluez.Device1" for i in dev_intro.interfaces):
+                log.debug("Speaker %s not in BlueZ — skipping connect", mac)
+                return
+            dev = self._bus.get_proxy_object("org.bluez", dev_path, dev_intro)
+            dev_iface = dev.get_interface("org.bluez.Device1")
+            log.info("Connecting speaker %s", mac)
+            await asyncio.wait_for(dev_iface.call_connect(), timeout=15.0)
+            log.info("Speaker %s connected", mac)
+        except Exception as exc:
+            log.debug("Speaker connect %s: %s", mac, exc)
 
     def get_last_connected_mac(self) -> str | None:
         """Get the MAC of the most recently connected phone."""
@@ -938,7 +1000,7 @@ class BleManager:
         """
         if not self._bus:
             return
-        dev_path = "/org/bluez/hci0/dev_" + mac.replace(":", "_")
+        dev_path = self._adapter_path + "/dev_" + mac.replace(":", "_")
         try:
             dev_intro = await self._bus.introspect("org.bluez", dev_path)
             if not any(i.name == "org.bluez.Device1" for i in dev_intro.interfaces):

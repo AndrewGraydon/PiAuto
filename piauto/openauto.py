@@ -87,7 +87,11 @@ async def ensure_tls_cert() -> bool:
 
 
 async def _kill_stale_autoapp() -> None:
-    """Kill any stale autoapp/openauto processes that might hold port 5000."""
+    """Kill any stale autoapp/openauto processes and wait for port 5000 to be free.
+
+    Polls ss after killing so the caller never launches OpenAuto while the port
+    is still in TIME_WAIT from a previous session.
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
             "pkill", "-9", "-f", "autoapp",
@@ -95,10 +99,29 @@ async def _kill_stale_autoapp() -> None:
             stderr=asyncio.subprocess.DEVNULL,
         )
         await proc.wait()
-        # Brief delay for port release
-        await asyncio.sleep(0.5)
     except FileNotFoundError:
         pass
+
+    # Wait up to 10 s for port 5000 to be fully released (clears TIME_WAIT etc.)
+    deadline = 10.0
+    poll = 0.5
+    elapsed = 0.0
+    while elapsed < deadline:
+        try:
+            ss_proc = await asyncio.create_subprocess_exec(
+                "ss", "-tlnH",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await ss_proc.communicate()
+            if b":5000 " not in stdout and b":5000\t" not in stdout:
+                return
+        except (FileNotFoundError, OSError):
+            return  # ss not available; best-effort
+        await asyncio.sleep(poll)
+        elapsed += poll
+
+    log.warning("Port 5000 still occupied after %.0f s — launching anyway", deadline)
 
 
 class OpenAutoManager:
